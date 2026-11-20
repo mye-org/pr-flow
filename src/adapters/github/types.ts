@@ -24,6 +24,14 @@ export interface PullRequestSummary {
   merged: boolean;
 }
 
+export interface ManagedPrSummary {
+  number: number;
+  headRef: string;
+  issueNumber: number;
+  updatedAt: string;
+  latestReviewState: string | null;
+}
+
 export interface GitHubPort {
   getIssue(issueNumber: number): TE.TaskEither<DomainError, IssueNode>;
   listAllIssues(state?: 'open' | 'closed' | 'all'): TE.TaskEither<DomainError, IssueNode[]>;
@@ -50,6 +58,7 @@ export interface GitHubPort {
 
   // Pull Requests
   listOpenPrsForIssue(issueNumber: number): TE.TaskEither<DomainError, PullRequestSummary[]>;
+  listOpenAiManagedPrs(): TE.TaskEither<DomainError, ManagedPrSummary[]>;
   createPullRequest(input: CreatePullRequestInput): TE.TaskEither<DomainError, PullRequestSummary>;
   addPrComment(prNumber: number, body: string): TE.TaskEither<DomainError, void>;
   getPrReviewComments(prNumber: number): TE.TaskEither<DomainError, string[]>;

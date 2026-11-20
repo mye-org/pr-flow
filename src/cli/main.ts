@@ -599,6 +599,36 @@ program
         availableSlots--;
         dispatched++;
       }
+
+      // Also auto-retry open ai-managed PRs with unaddressed CHANGES_REQUESTED past cooldown
+      const managedPrs = await runOrExit(github.listOpenAiManagedPrs());
+      for (const pr of managedPrs) {
+        if (pr.latestReviewState !== 'CHANGES_REQUESTED') continue;
+        const linkedIssue = byNumber.get(pr.issueNumber);
+        if (!linkedIssue || linkedIssue.state !== 'open' || linkedIssue.status !== 'review_pending') {
+          continue;
+        }
+        const ageMs = now - Date.parse(pr.updatedAt);
+        if (!Number.isNaN(ageMs) && ageMs < cooldownMs) continue;
+
+        const comments = await runOrExit(github.listIssueComments(pr.issueNumber));
+        let retryCount = 0;
+        for (const body of comments) {
+          const matches = body.matchAll(/<!--\s*pr-flow:retries=(\d+)\s*-->/g);
+          for (const m of matches) {
+            const n = Number(m[1]);
+            if (!Number.isNaN(n) && n > retryCount) retryCount = n;
+          }
+        }
+        if (retryCount >= config.agent.maxRetries) continue;
+
+        await runOrExit(
+          github.dispatchWorkflow('pr-flow-review.yml', config.baseBranch, {
+            pr_number: String(pr.number),
+          }),
+        );
+        dispatched++;
+      }
     }
 
     console.log(JSON.stringify({ reconciled: true, unblocked, rolledUp, dispatched }));

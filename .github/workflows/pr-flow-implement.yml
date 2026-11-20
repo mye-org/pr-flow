@@ -11,7 +11,7 @@ on:
         type: number
 
 concurrency:
-  group: fsm-dispatcher
+  group: fsm-implement-${{ github.event.issue.number || inputs.issue_number }}
   cancel-in-progress: false
 
 permissions:

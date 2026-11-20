@@ -81,7 +81,7 @@ on:
         type: number
 
 concurrency:
-  group: fsm-dispatcher
+  group: fsm-implement-\${{ github.event.issue.number || inputs.issue_number }}
   cancel-in-progress: false
 
 permissions:
@@ -106,9 +106,15 @@ jobs:
 on:
   pull_request_review:
     types: [submitted]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to address review feedback on'
+        required: true
+        type: number
 
 concurrency:
-  group: pr-flow-review-\${{ github.event.pull_request.number }}
+  group: pr-flow-review-\${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: false
 
 permissions:
@@ -119,11 +125,12 @@ permissions:
 jobs:
   review:
     if: >-
-      github.event.review.state == 'changes_requested' &&
-      contains(github.event.pull_request.labels.*.name, 'ai-managed')
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.review.state == 'changes_requested' &&
+      contains(github.event.pull_request.labels.*.name, 'ai-managed'))
     uses: ${usesPrefix}/reusable-review.yml@${opts.prFlowRef}
     with:
-      pr_number: \${{ github.event.pull_request.number }}
+      pr_number: \${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.pr_number) || github.event.pull_request.number }}
     secrets:
       GEMINI_API_KEY: \${{ secrets.GEMINI_API_KEY }}
 `;
@@ -137,7 +144,7 @@ on:
     types: [closed]
 
 concurrency:
-  group: fsm-dispatcher
+  group: fsm-sync
   cancel-in-progress: false
 
 permissions:

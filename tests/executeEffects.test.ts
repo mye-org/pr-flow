@@ -1,3 +1,10 @@
+/**
+ * @file executeEffects.test.ts
+ * @description Unit tests for the executeEffects interpreter. Verifies that domain effects
+ * (such as SWAP_STATUS_LABEL, ADD_COMMENT, CREATE_ISSUE, etc.) are correctly executed
+ * via the GitHub adapter port and return expected TaskEither results.
+ */
+
 import * as E from 'fp-ts/Either';
 import * as TE from 'fp-ts/TaskEither';
 import { describe, expect, it, vi } from 'vitest';

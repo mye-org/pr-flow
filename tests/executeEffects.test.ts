@@ -30,7 +30,9 @@ const mockGithub = (): GitHubPort => ({
   listBlocking: vi.fn(),
   addBlockedBy: vi.fn(),
   listOpenPrsForIssue: vi.fn(),
+  listOpenAiManagedPrs: vi.fn(),
   createPullRequest: vi.fn(),
+  mergePullRequest: vi.fn(),
   addPrComment: vi.fn(),
   getPrReviewComments: vi.fn(),
 });

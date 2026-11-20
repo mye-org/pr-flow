@@ -24025,7 +24025,7 @@ program2.command("finalize").description("Apply changes.patch, push ai/issue-<N>
     });
     const commitMsg = existingPr ? `fix: address review feedback for #${issueNumber}` : `feat: implement #${issueNumber} (${issue.title})`;
     runGit(`commit -m ${JSON.stringify(commitMsg)}`, cwd);
-    runGit(`push origin ${branch}`, cwd);
+    runGit(existingPr ? `push origin ${branch}` : `push --force origin ${branch}`, cwd);
   } catch (err) {
     const transition2 = transitionIssue(issue, {
       type: "EXECUTION_FAILED",

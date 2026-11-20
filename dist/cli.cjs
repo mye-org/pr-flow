@@ -19344,7 +19344,7 @@ var PrFlowConfigSchema = external_exports.object({
   }),
   agent: external_exports.object({
     provider: external_exports.enum(["gemini", "custom"]).default("gemini"),
-    model: external_exports.string().default("gemini-3.1-pro-preview"),
+    model: external_exports.string().default("gemini-3.8-flash"),
     command: external_exports.string().optional(),
     timeoutMinutes: external_exports.number().int().min(1).default(20)
   }).default({}),
@@ -23412,7 +23412,7 @@ workspace:
 
 agent:
   provider: gemini
-  model: gemini-3.1-pro-preview
+  model: gemini-3.8-flash
   timeoutMinutes: 20
 
 triggers:

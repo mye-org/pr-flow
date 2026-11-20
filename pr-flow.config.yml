@@ -8,7 +8,7 @@ workspace:
 
 agent:
   provider: gemini
-  model: gemini-2.5-flash
+  model: gemini-3.8-flash
   timeoutMinutes: 20
 
 triggers:

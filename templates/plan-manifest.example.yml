@@ -1,0 +1,43 @@
+version: 1
+epic:
+  id: epic-auth
+  title: "Epic: User Authentication & Session Security"
+  body: |
+    Implement end-to-end authentication, session middleware, and integration tests.
+  priority: p1
+
+issues:
+  - id: story-token-service
+    title: "Story: JWT Token Service"
+    body: "Container story for token signing and verification."
+    type: story
+    priority: p1
+
+  - id: task-jwt-sign
+    title: "Implement JWT signing and key rotation"
+    body: |
+      ## Acceptance Criteria
+      - Sign access tokens with RS256/HS256 configurable secret.
+      - Add unit tests covering expiration and invalid signatures.
+    type: task
+    priority: p1
+    parentId: story-token-service
+
+  - id: task-auth-middleware
+    title: "Add HTTP auth middleware"
+    body: |
+      ## Acceptance Criteria
+      - Validate `Authorization: Bearer <token>` header.
+      - Return 401 on missing or expired tokens.
+    type: task
+    priority: p1
+    parentId: story-token-service
+    blockedBy:
+      - task-jwt-sign
+
+  - id: bug-cookie-samesite
+    title: "Fix SameSite attribute on session cookie"
+    body: "Ensure session cookies use `SameSite=Lax` in production."
+    type: bug
+    priority: p0
+    parentId: story-token-service

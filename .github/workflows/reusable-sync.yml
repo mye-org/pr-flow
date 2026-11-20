@@ -1,0 +1,47 @@
+name: Reusable Sync
+
+on:
+  workflow_call:
+    inputs:
+      issue_number:
+        required: false
+        type: number
+        default: 0
+      pr_number:
+        required: false
+        type: number
+        default: 0
+      pr_merged:
+        required: false
+        type: boolean
+        default: false
+      pr_flow_ref:
+        required: false
+        type: string
+        default: v1
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: mingqianye/pr-flow
+          ref: ${{ inputs.pr_flow_ref }}
+          path: _pr_flow
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Sync dependencies and parent rollups
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ARGS="--issue ${{ inputs.issue_number }} --pr ${{ inputs.pr_number }}"
+          if [ "${{ inputs.pr_merged }}" = "true" ]; then
+            ARGS="$ARGS --pr-merged"
+          fi
+          node _pr_flow/dist/cli.cjs sync $ARGS

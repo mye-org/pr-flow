@@ -1,0 +1,104 @@
+name: Reusable Review Follow-up
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        required: true
+        type: number
+      pr_flow_ref:
+        required: false
+        type: string
+        default: v1
+    secrets:
+      GEMINI_API_KEY:
+        required: false
+
+jobs:
+  resolve_issue:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      issue_number: ${{ steps.resolve.outputs.issue_number }}
+      head_ref: ${{ steps.resolve.outputs.head_ref }}
+    steps:
+      - name: Extract issue number from PR branch ai/issue-<N>
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          HEAD_REF=$(gh pr view "${{ inputs.pr_number }}" --repo "${{ github.repository }}" --json headRefName -q '.headRefName')
+          ISSUE_NUM=$(echo "$HEAD_REF" | sed -n 's/^ai\/issue-\([0-9]\+\)$/\1/p')
+          echo "head_ref=$HEAD_REF" >> "$GITHUB_OUTPUT"
+          echo "issue_number=$ISSUE_NUM" >> "$GITHUB_OUTPUT"
+
+  execute:
+    needs: resolve_issue
+    if: needs.resolve_issue.outputs.issue_number != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve_issue.outputs.head_ref }}
+      - uses: actions/checkout@v4
+        with:
+          repository: mingqianye/pr-flow
+          ref: ${{ inputs.pr_flow_ref }}
+          path: _pr_flow
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Execute review follow-up with zero write tokens
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          node _pr_flow/dist/cli.cjs execute \
+            --issue "${{ needs.resolve_issue.outputs.issue_number }}" \
+            --pr "${{ inputs.pr_number }}" \
+            --output-dir .pr-flow-out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr-flow-review-${{ inputs.pr_number }}
+          path: .pr-flow-out/
+
+  finalize:
+    needs: [resolve_issue, execute]
+    if: always() && needs.resolve_issue.outputs.issue_number != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: mingqianye/pr-flow
+          ref: ${{ inputs.pr_flow_ref }}
+          path: _pr_flow
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          name: pr-flow-review-${{ inputs.pr_number }}
+          path: .pr-flow-out/
+      - name: Append review fix commit to PR branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node _pr_flow/dist/cli.cjs finalize \
+            --issue "${{ needs.resolve_issue.outputs.issue_number }}" \
+            --pr "${{ inputs.pr_number }}" \
+            --result .pr-flow-out/result.json \
+            --patch .pr-flow-out/changes.patch

@@ -1,0 +1,30 @@
+name: Reusable Reconcile
+
+on:
+  workflow_call:
+    inputs:
+      pr_flow_ref:
+        required: false
+        type: string
+        default: v1
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: mingqianye/pr-flow
+          ref: ${{ inputs.pr_flow_ref }}
+          path: _pr_flow
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Reconcile repository state
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node _pr_flow/dist/cli.cjs reconcile

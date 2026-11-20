@@ -1,0 +1,5 @@
+node_modules/
+.env
+*.log
+coverage/
+# Note: dist/cli.cjs is intentionally committed so @v1 reusable workflows can execute it directly.

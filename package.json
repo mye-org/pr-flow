@@ -1,0 +1,43 @@
+{
+  "name": "pr-flow",
+  "version": "1.0.0",
+  "description": "Project-agnostic Agile Issue-to-PR GitHub workflow engine and state machine",
+  "type": "module",
+  "bin": {
+    "pr-flow": "./dist/cli.cjs"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "verify": "npm run typecheck && npm run build && npm run test"
+  },
+  "keywords": [
+    "github-actions",
+    "workflow",
+    "xstate",
+    "fp-ts",
+    "ai-agent",
+    "pull-request",
+    "agile"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@octokit/rest": "^21.0.2",
+    "commander": "^12.1.0",
+    "fp-ts": "^2.16.9",
+    "ts-pattern": "^5.5.0",
+    "xstate": "^5.19.0",
+    "yaml": "^2.6.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

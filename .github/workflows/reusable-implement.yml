@@ -1,0 +1,109 @@
+name: Reusable Implement
+
+on:
+  workflow_call:
+    inputs:
+      issue_number:
+        required: true
+        type: number
+      pr_flow_ref:
+        required: false
+        type: string
+        default: v1
+    secrets:
+      GEMINI_API_KEY:
+        required: false
+
+jobs:
+  claim:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    outputs:
+      claimed: ${{ steps.claim.outputs.claimed }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: mingqianye/pr-flow
+          ref: ${{ inputs.pr_flow_ref }}
+          path: _pr_flow
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Claim issue via pr-flow FSM
+        id: claim
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          OUT=$(node _pr_flow/dist/cli.cjs claim --issue "${{ inputs.issue_number }}")
+          echo "$OUT"
+          CLAIMED=$(echo "$OUT" | jq -r '.claimed // false')
+          echo "claimed=$CLAIMED" >> "$GITHUB_OUTPUT"
+
+  execute:
+    needs: claim
+    if: needs.claim.outputs.claimed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: mingqianye/pr-flow
+          ref: ${{ inputs.pr_flow_ref }}
+          path: _pr_flow
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Execute AI agent with zero write tokens
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          node _pr_flow/dist/cli.cjs execute \
+            --issue "${{ inputs.issue_number }}" \
+            --output-dir .pr-flow-out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr-flow-out-${{ inputs.issue_number }}
+          path: .pr-flow-out/
+
+  finalize:
+    needs: [claim, execute]
+    if: always() && needs.claim.outputs.claimed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: mingqianye/pr-flow
+          ref: ${{ inputs.pr_flow_ref }}
+          path: _pr_flow
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          name: pr-flow-out-${{ inputs.issue_number }}
+          path: .pr-flow-out/
+      - name: Finalize branch, PR, and issue state
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node _pr_flow/dist/cli.cjs finalize \
+            --issue "${{ inputs.issue_number }}" \
+            --result .pr-flow-out/result.json \
+            --patch .pr-flow-out/changes.patch

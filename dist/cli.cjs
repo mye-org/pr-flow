@@ -15303,7 +15303,8 @@ function runAgentExecution(params) {
   }
   const agentRun = runShell(agentCommand, cwd, {
     PR_FLOW_PROMPT_FILE: promptPath,
-    PR_FLOW_RESULT_FILE: resultPath
+    PR_FLOW_RESULT_FILE: resultPath,
+    GEMINI_CLI_TRUST_WORKSPACE: "true"
   });
   let parsedResult = null;
   if (fs.existsSync(resultPath)) {
@@ -15348,6 +15349,10 @@ ${verify.output.slice(-1500)}`,
   fs.writeFileSync(resultPath, JSON.stringify(finalResult, null, 2), "utf-8");
   try {
     (0, import_node_child_process.execSync)("git add -A", { cwd, stdio: "pipe" });
+    const relOut = path.relative(cwd, outputDir);
+    if (relOut && !relOut.startsWith("..") && !path.isAbsolute(relOut)) {
+      (0, import_node_child_process.execSync)(`git reset -- ${JSON.stringify(relOut)}`, { cwd, stdio: "pipe" });
+    }
     const diff = (0, import_node_child_process.execSync)("git diff --cached --binary", { cwd, encoding: "utf-8" });
     fs.writeFileSync(patchPath, diff, "utf-8");
     return right2({
@@ -23455,7 +23460,7 @@ jobs:
       github.event.label.name == 'status:ready'
     uses: ${usesPrefix}/reusable-implement.yml@${opts.prFlowRef}
     with:
-      issue_number: \${{ github.event_name == 'workflow_dispatch' && inputs.issue_number || github.event.issue.number }}
+      issue_number: \${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.issue_number) || github.event.issue.number }}
     secrets:
       GEMINI_API_KEY: \${{ secrets.GEMINI_API_KEY }}
 `;

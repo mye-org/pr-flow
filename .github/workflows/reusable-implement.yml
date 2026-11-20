@@ -68,12 +68,12 @@ jobs:
         run: |
           node _pr_flow/dist/cli.cjs execute \
             --issue "${{ inputs.issue_number }}" \
-            --output-dir .pr-flow-out
+            --output-dir pr-flow-out
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: pr-flow-out-${{ inputs.issue_number }}
-          path: .pr-flow-out/
+          path: pr-flow-out/
 
   finalize:
     needs: [claim, execute]
@@ -98,12 +98,12 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: pr-flow-out-${{ inputs.issue_number }}
-          path: .pr-flow-out/
+          path: pr-flow-out/
       - name: Finalize branch, PR, and issue state
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           node _pr_flow/dist/cli.cjs finalize \
             --issue "${{ inputs.issue_number }}" \
-            --result .pr-flow-out/result.json \
-            --patch .pr-flow-out/changes.patch
+            --result pr-flow-out/result.json \
+            --patch pr-flow-out/changes.patch

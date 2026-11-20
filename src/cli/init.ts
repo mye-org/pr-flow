@@ -92,7 +92,7 @@ jobs:
       github.event.label.name == 'status:ready'
     uses: ${usesPrefix}/reusable-implement.yml@${opts.prFlowRef}
     with:
-      issue_number: \${{ github.event_name == 'workflow_dispatch' && inputs.issue_number || github.event.issue.number }}
+      issue_number: \${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.issue_number) || github.event.issue.number }}
     secrets:
       GEMINI_API_KEY: \${{ secrets.GEMINI_API_KEY }}
 `;

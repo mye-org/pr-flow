@@ -64,6 +64,7 @@ export function runAgentExecution(params: {
   const agentRun = runShell(agentCommand, cwd, {
     PR_FLOW_PROMPT_FILE: promptPath,
     PR_FLOW_RESULT_FILE: resultPath,
+    GEMINI_CLI_TRUST_WORKSPACE: 'true',
   });
 
   // Always check if result.json was written
@@ -113,9 +114,13 @@ export function runAgentExecution(params: {
   };
   fs.writeFileSync(resultPath, JSON.stringify(finalResult, null, 2), 'utf-8');
 
-  // Stage untracked files and export full git diff into changes.patch
+  // Stage untracked files (excluding outputDir) and export full git diff into changes.patch
   try {
     execSync('git add -A', { cwd, stdio: 'pipe' });
+    const relOut = path.relative(cwd, outputDir);
+    if (relOut && !relOut.startsWith('..') && !path.isAbsolute(relOut)) {
+      execSync(`git reset -- ${JSON.stringify(relOut)}`, { cwd, stdio: 'pipe' });
+    }
     const diff = execSync('git diff --cached --binary', { cwd, encoding: 'utf-8' });
     fs.writeFileSync(patchPath, diff, 'utf-8');
     return E.right({

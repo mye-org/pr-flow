@@ -38,7 +38,7 @@ describe('computeRollupEffects', () => {
     );
     expect(targetStatus).toBe('fixed');
     expect(effects).toEqual([
-      { type: 'SWAP_STATUS_LABEL', issueNumber: 1, from: 'in_progress', to: 'fixed' },
+      { type: 'SET_STATUS_FIELD', issueNumber: 1, from: 'in_progress', to: 'fixed' },
       { type: 'CLOSE_ISSUE', issueNumber: 1 },
     ]);
   });
@@ -50,7 +50,7 @@ describe('computeRollupEffects', () => {
     );
     expect(targetStatus).toBe('needs_human');
     expect(effects).toEqual([
-      { type: 'SWAP_STATUS_LABEL', issueNumber: 1, from: 'fixed', to: 'needs_human' },
+      { type: 'SET_STATUS_FIELD', issueNumber: 1, from: 'fixed', to: 'needs_human' },
       { type: 'REOPEN_ISSUE', issueNumber: 1 },
     ]);
   });

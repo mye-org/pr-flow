@@ -16,7 +16,6 @@ export function buildImplementPrompt(params: {
 - **Number:** #${params.issue.number}
 - **Title:** ${params.issue.title}
 - **Type:** ${params.issue.type}
-- **Priority:** ${params.issue.priority}
 
 ### Description
 ${params.issue.body || '(No description provided)'}

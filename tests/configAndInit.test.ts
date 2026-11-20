@@ -16,6 +16,7 @@ workspace:
     if (E.isRight(res)) {
       expect(res.right.wipLimit).toBe(4);
       expect(res.right.baseBranch).toBe('main');
+      expect(res.right.statusFieldName).toBe('pr-flow-status');
       expect(res.right.agent.provider).toBe('gemini');
       expect(res.right.agent.fallbackModels).toEqual([]);
       expect(res.right.agent.maxRetries).toBe(3);
@@ -49,11 +50,15 @@ describe('generateInitFiles', () => {
         reviewMode: 'changes_requested',
         force: false,
       });
-      expect(first.written).toHaveLength(6);
+      expect(first.written).toHaveLength(7);
       expect(first.skipped).toHaveLength(0);
       expect(fs.existsSync(path.join(tmpDir, 'pr-flow.config.yml'))).toBe(true);
       expect(fs.existsSync(path.join(tmpDir, 'AGENTS.md'))).toBe(true);
+      expect(fs.existsSync(path.join(tmpDir, '.agents/skills/pr-flow/SKILL.md'))).toBe(true);
       expect(fs.existsSync(path.join(tmpDir, '.github/workflows/pr-flow-implement.yml'))).toBe(true);
+      expect(
+        fs.readFileSync(path.join(tmpDir, '.github/workflows/pr-flow-implement.yml'), 'utf-8'),
+      ).toContain('field_added');
 
       const second = generateInitFiles({
         targetDir: tmpDir,
@@ -67,7 +72,7 @@ describe('generateInitFiles', () => {
         force: false,
       });
       expect(second.written).toHaveLength(0);
-      expect(second.skipped).toHaveLength(6);
+      expect(second.skipped).toHaveLength(7);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

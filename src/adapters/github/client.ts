@@ -4,10 +4,13 @@ import { pipe } from 'fp-ts/function';
 import type { DomainError } from '../../domain/errors.js';
 import {
   branchNameForIssue,
-  extractPriorityFromLabels,
-  extractStatusFromLabels,
+  extractStatusFromFieldValue,
   extractTypeFromLabels,
+  PR_FLOW_STATUS_FIELD_NAME,
+  PR_FLOW_STATUS_OPTIONS,
+  STATUS_TO_FIELD_VALUE,
   type IssueNode,
+  type IssueStatus,
   type LabelDefinition,
 } from '../../domain/issue.js';
 import type {
@@ -43,11 +46,44 @@ interface RawGitHubIssue {
   pull_request?: unknown;
 }
 
+interface GraphQLIssueFieldValueNode {
+  __typename?: string;
+  name?: string;
+  field?: {
+    id?: string;
+    name?: string;
+  };
+}
+
+interface GraphQLIssueNode {
+  number: number;
+  title: string;
+  body: string | null;
+  state: 'OPEN' | 'CLOSED';
+  updatedAt: string;
+  labels: { nodes: Array<{ name: string }> };
+  issueFieldValues?: { nodes: GraphQLIssueFieldValueNode[] };
+}
+
+function extractStatusFieldValueFromGraphQL(
+  nodes: readonly GraphQLIssueFieldValueNode[] | undefined,
+  fieldName: string,
+): string | null {
+  if (!nodes) return null;
+  for (const node of nodes) {
+    if (node.field?.name === fieldName && typeof node.name === 'string') {
+      return node.name;
+    }
+  }
+  return null;
+}
+
 function mapRawIssue(
   raw: RawGitHubIssue,
   subIssueNumbers: number[] = [],
   blockedByNumbers: number[] = [],
   blockingNumbers: number[] = [],
+  statusValue: string | null = null,
 ): IssueNode {
   const labels = raw.labels
     .map((l) => (typeof l === 'string' ? l : (l.name ?? '')))
@@ -58,9 +94,8 @@ function mapRawIssue(
     title: raw.title,
     body: raw.body ?? '',
     state: raw.state === 'closed' ? 'closed' : 'open',
-    status: extractStatusFromLabels(labels),
+    status: extractStatusFromFieldValue(statusValue),
     type: extractTypeFromLabels(labels),
-    priority: extractPriorityFromLabels(labels),
     labels,
     subIssueNumbers,
     blockedByNumbers,
@@ -75,11 +110,137 @@ export class OctokitGitHubAdapter implements GitHubPort {
   private readonly octokit: Octokit;
   private readonly owner: string;
   private readonly repo: string;
+  private readonly statusFieldName: string;
+  private cachedStatusFieldId: number | null = null;
 
-  constructor(options: { token: string; owner: string; repo: string }) {
+  constructor(options: {
+    token: string;
+    owner: string;
+    repo: string;
+    statusFieldName?: string;
+  }) {
     this.octokit = new Octokit({ auth: options.token });
     this.owner = options.owner;
     this.repo = options.repo;
+    this.statusFieldName = options.statusFieldName ?? PR_FLOW_STATUS_FIELD_NAME;
+  }
+
+  private async resolveStatusFieldId(): Promise<number> {
+    if (this.cachedStatusFieldId !== null) {
+      return this.cachedStatusFieldId;
+    }
+    const res = await this.octokit.request('GET /orgs/{org}/issue-fields', {
+      org: this.owner,
+    });
+    const fields = res.data as Array<{ id: number; name: string }>;
+    const match = fields.find((f) => f.name === this.statusFieldName);
+    if (!match) {
+      throw new Error(
+        `Issue field "${this.statusFieldName}" not found in organization "${this.owner}". Run "pr-flow fields sync --repo ${this.owner}/${this.repo}" with an org-admin token or create it in Organization Settings -> Issue Fields.`,
+      );
+    }
+    this.cachedStatusFieldId = match.id;
+    return match.id;
+  }
+
+  private getIssueStatusFieldValue(issueNumber: number): TE.TaskEither<DomainError, string | null> {
+    return TE.tryCatch(
+      async () => {
+        const query = `
+          query GetIssueFieldValues($owner: String!, $repo: String!, $number: Int!) {
+            repository(owner: $owner, name: $repo) {
+              issue(number: $number) {
+                issueFieldValues(first: 20) {
+                  nodes {
+                    __typename
+                    ... on IssueFieldSingleSelectValue {
+                      name
+                      field {
+                        ... on IssueFieldSingleSelect {
+                          name
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        `;
+        const data = await this.octokit.graphql<{
+          repository: {
+            issue: {
+              issueFieldValues: { nodes: GraphQLIssueFieldValueNode[] };
+            } | null;
+          };
+        }>(query, {
+          owner: this.owner,
+          repo: this.repo,
+          number: issueNumber,
+          headers: { 'GraphQL-Features': 'issue_fields' },
+        });
+        return extractStatusFieldValueFromGraphQL(
+          data.repository.issue?.issueFieldValues.nodes,
+          this.statusFieldName,
+        );
+      },
+      (err) => toGitHubError(`Failed to fetch issue field values for #${issueNumber}`, err),
+    );
+  }
+
+  setIssueStatus(issueNumber: number, status: IssueStatus): TE.TaskEither<DomainError, void> {
+    return TE.tryCatch(
+      async () => {
+        const fieldId = await this.resolveStatusFieldId();
+        await this.octokit.request(
+          'POST /repos/{owner}/{repo}/issues/{issue_number}/issue-field-values',
+          {
+            owner: this.owner,
+            repo: this.repo,
+            issue_number: issueNumber,
+            issue_field_values: [
+              {
+                field_id: fieldId,
+                value: STATUS_TO_FIELD_VALUE[status],
+              },
+            ],
+          },
+        );
+      },
+      (err) => toGitHubError(`Failed to set "${this.statusFieldName}" on #${issueNumber} to "${status}"`, err),
+    );
+  }
+
+  ensureStatusField(): TE.TaskEither<DomainError, void> {
+    return TE.tryCatch(
+      async () => {
+        const res = await this.octokit.request('GET /orgs/{org}/issue-fields', {
+          org: this.owner,
+        });
+        const fields = res.data as Array<{ id: number; name: string }>;
+        const existing = fields.find((f) => f.name === this.statusFieldName);
+        if (existing) {
+          this.cachedStatusFieldId = existing.id;
+          return;
+        }
+        const created = await this.octokit.request('POST /orgs/{org}/issue-fields', {
+          org: this.owner,
+          name: this.statusFieldName,
+          data_type: 'single_select',
+          description: 'pr-flow automated Issue-to-PR lifecycle status',
+          options: PR_FLOW_STATUS_OPTIONS.map((opt) => ({
+            name: opt.name,
+            color: opt.color,
+            description: opt.description,
+          })),
+        });
+        const createdData = created.data as { id?: number };
+        if (typeof createdData.id === 'number') {
+          this.cachedStatusFieldId = createdData.id;
+        }
+      },
+      (err) => toGitHubError(`Failed to ensure "${this.statusFieldName}" issue field in org "${this.owner}"`, err),
+    );
   }
 
   getIssue(issueNumber: number): TE.TaskEither<DomainError, IssueNode> {
@@ -99,12 +260,14 @@ export class OctokitGitHubAdapter implements GitHubPort {
           TE.apS('subIssues', this.listSubIssues(issueNumber)),
           TE.apS('blockedBy', this.listBlockedBy(issueNumber)),
           TE.apS('blocking', this.listBlocking(issueNumber)),
-          TE.map(({ subIssues, blockedBy, blocking }) =>
+          TE.apS('statusValue', this.getIssueStatusFieldValue(issueNumber)),
+          TE.map(({ subIssues, blockedBy, blocking, statusValue }) =>
             mapRawIssue(
               res.data as RawGitHubIssue,
               subIssues,
               blockedBy.map((b) => b.number),
               blocking,
+              statusValue,
             ),
           ),
         ),
@@ -115,15 +278,95 @@ export class OctokitGitHubAdapter implements GitHubPort {
   listAllIssues(state: 'open' | 'closed' | 'all' = 'all'): TE.TaskEither<DomainError, IssueNode[]> {
     return TE.tryCatch(
       async () => {
-        const rawIssues = await this.octokit.paginate(this.octokit.rest.issues.listForRepo, {
-          owner: this.owner,
-          repo: this.repo,
-          state,
-          per_page: 100,
-        });
-        return rawIssues
-          .filter((item) => !('pull_request' in item && item.pull_request))
-          .map((item) => mapRawIssue(item as unknown as RawGitHubIssue));
+        const states =
+          state === 'open' ? ['OPEN'] : state === 'closed' ? ['CLOSED'] : ['OPEN', 'CLOSED'];
+        const query = `
+          query ListIssuesWithFields($owner: String!, $repo: String!, $states: [IssueState!], $after: String) {
+            repository(owner: $owner, name: $repo) {
+              issues(first: 100, states: $states, after: $after) {
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
+                nodes {
+                  number
+                  title
+                  body
+                  state
+                  updatedAt
+                  labels(first: 30) {
+                    nodes {
+                      name
+                    }
+                  }
+                  issueFieldValues(first: 20) {
+                    nodes {
+                      __typename
+                      ... on IssueFieldSingleSelectValue {
+                        name
+                        field {
+                          ... on IssueFieldSingleSelect {
+                            name
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        `;
+
+        const results: IssueNode[] = [];
+        let after: string | null = null;
+
+        while (true) {
+          const data: {
+            repository: {
+              issues: {
+                pageInfo: { hasNextPage: boolean; endCursor: string | null };
+                nodes: GraphQLIssueNode[];
+              };
+            };
+          } = await this.octokit.graphql(query, {
+            owner: this.owner,
+            repo: this.repo,
+            states,
+            after,
+            headers: { 'GraphQL-Features': 'issue_fields' },
+          });
+
+          for (const node of data.repository.issues.nodes) {
+            const labels = node.labels.nodes.map((l) => l.name);
+            const statusValue = extractStatusFieldValueFromGraphQL(
+              node.issueFieldValues?.nodes,
+              this.statusFieldName,
+            );
+            results.push({
+              number: node.number,
+              title: node.title,
+              body: node.body ?? '',
+              state: node.state === 'CLOSED' ? 'closed' : 'open',
+              status: extractStatusFromFieldValue(statusValue),
+              type: extractTypeFromLabels(labels),
+              labels,
+              subIssueNumbers: [],
+              blockedByNumbers: [],
+              blockingNumbers: [],
+              linkedPrNumber: null,
+              parentNumber: null,
+              updatedAt: node.updatedAt,
+            });
+          }
+
+          if (!data.repository.issues.pageInfo.hasNextPage) {
+            break;
+          }
+          after = data.repository.issues.pageInfo.endCursor;
+        }
+
+        return results;
       },
       (err) => toGitHubError('Failed to list repository issues', err),
     );

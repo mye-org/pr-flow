@@ -3,7 +3,6 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import type { DomainError } from './errors.js';
 
-export const PlanPrioritySchema = z.enum(['p0', 'p1', 'p2', 'p3']);
 export const PlanIssueTypeSchema = z.enum(['epic', 'story', 'task', 'bug']);
 
 export const PlanIssueNodeSchema = z.object({
@@ -11,7 +10,6 @@ export const PlanIssueNodeSchema = z.object({
   title: z.string().min(1),
   body: z.string().default(''),
   type: PlanIssueTypeSchema,
-  priority: PlanPrioritySchema.default('p2'),
   parentId: z.string().min(1).optional(),
   blockedBy: z.array(z.string().min(1)).default([]),
   labels: z.array(z.string().min(1)).default([]),
@@ -24,7 +22,6 @@ export const PlanManifestSchema = z.object({
       id: z.string().min(1),
       title: z.string().min(1),
       body: z.string().default(''),
-      priority: PlanPrioritySchema.default('p1'),
     })
     .optional(),
   issues: z.array(PlanIssueNodeSchema).min(1),

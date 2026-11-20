@@ -5,8 +5,6 @@ import type { GitHubPort } from '../adapters/github/types.js';
 import type { DomainError } from '../domain/errors.js';
 import {
   AI_MANAGED_LABEL,
-  PRIORITY_TO_LABEL,
-  STATUS_TO_LABEL,
   TYPE_TO_LABEL,
 } from '../domain/issue.js';
 import type { PlanManifest } from '../domain/plan.js';
@@ -38,13 +36,12 @@ export function materializePlan(
               body: validManifest.epic.body,
               labels: [
                 TYPE_TO_LABEL.epic,
-                PRIORITY_TO_LABEL[validManifest.epic.priority],
-                STATUS_TO_LABEL.backlog,
                 AI_MANAGED_LABEL,
               ],
             }),
-            TE.map((created) => {
+            TE.chain((created) => {
               idToNumber.set(validManifest.epic!.id, created.number);
+              return github.setIssueStatus(created.number, 'backlog');
             }),
           )
         : TE.right(undefined);
@@ -61,8 +58,6 @@ export function materializePlan(
                   const labels = Array.from(
                     new Set([
                       TYPE_TO_LABEL[node.type],
-                      PRIORITY_TO_LABEL[node.priority],
-                      STATUS_TO_LABEL[initialStatus],
                       AI_MANAGED_LABEL,
                       ...node.labels,
                     ]),
@@ -73,8 +68,9 @@ export function materializePlan(
                       body: node.body,
                       labels,
                     }),
-                    TE.map((created) => {
+                    TE.chain((created) => {
                       idToNumber.set(node.id, created.number);
+                      return github.setIssueStatus(created.number, initialStatus);
                     }),
                   );
                 }),

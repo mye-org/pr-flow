@@ -51,7 +51,7 @@ export function computeRollupEffects(
 
   if (targetStatus !== parent.status) {
     effects.push({
-      type: 'SWAP_STATUS_LABEL',
+      type: 'SET_STATUS_FIELD',
       issueNumber: parent.number,
       from: parent.status,
       to: targetStatus,

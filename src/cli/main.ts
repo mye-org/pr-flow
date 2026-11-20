@@ -64,7 +64,7 @@ function loadConfigFromDisk(configPath = 'pr-flow.config.yml'): PrFlowConfig {
   return parsed.right;
 }
 
-function createGitHubFromEnv(repoFlag?: string): GitHubPort {
+function createGitHubFromEnv(repoFlag?: string, statusFieldName?: string): GitHubPort {
   const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
   if (!token) {
     fail({ type: 'CONFIG_ERROR', message: 'GITHUB_TOKEN (or GH_TOKEN) environment variable is required.' });
@@ -74,7 +74,7 @@ function createGitHubFromEnv(repoFlag?: string): GitHubPort {
     fail({ type: 'CONFIG_ERROR', message: 'Repository must be specified via --repo owner/name or GITHUB_REPOSITORY.' });
   }
   const [owner, repo] = repoSlug.split('/', 2) as [string, string];
-  return new OctokitGitHubAdapter({ token, owner, repo });
+  return new OctokitGitHubAdapter({ token, owner, repo, statusFieldName });
 }
 
 async function runOrExit<T>(task: TE.TaskEither<DomainError, T>): Promise<T> {
@@ -98,7 +98,7 @@ program
 
 program
   .command('init')
-  .description('Bootstrap pr-flow config, AGENTS.md, and workflows in a target repository')
+  .description('Bootstrap pr-flow config, AGENTS.md, workflows, and agent skills in a target repository')
   .option('--dir <path>', 'Target repository directory', '.')
   .option('--owner <owner>', 'GitHub owner of the pr-flow repository', 'mingqianye')
   .option('--ref <ref>', 'Git ref/tag of pr-flow workflows', 'v1')
@@ -109,7 +109,8 @@ program
   .option('--review-mode <mode>', 'Review trigger mode (changes_requested|comment|both)', 'changes_requested')
   .option('--force', 'Overwrite existing files', false)
   .option('--sync-labels', 'Also sync GitHub labels via GITHUB_TOKEN', false)
-  .option('--repo <owner/repo>', 'Target GitHub repository for --sync-labels')
+  .option('--sync-fields', 'Also create/verify the pr-flow-status organization Issue Field via GITHUB_TOKEN', false)
+  .option('--repo <owner/repo>', 'Target GitHub repository for --sync-labels / --sync-fields')
   .action(async (opts) => {
     const result = generateInitFiles({
       targetDir: path.resolve(opts.dir),
@@ -132,6 +133,12 @@ program
       await runOrExit(github.ensureLabels(DEFAULT_LABELS));
       console.log(`Synced ${DEFAULT_LABELS.length} pr-flow labels to GitHub.`);
     }
+
+    if (opts.syncFields) {
+      const github = createGitHubFromEnv(opts.repo);
+      await runOrExit(github.ensureStatusField());
+      console.log('Synced pr-flow-status organization Issue Field.');
+    }
   });
 
 const labelsCmd = program.command('labels').description('Manage pr-flow GitHub labels');
@@ -144,6 +151,19 @@ labelsCmd
     const github = createGitHubFromEnv(opts.repo);
     await runOrExit(github.ensureLabels(DEFAULT_LABELS));
     console.log(`Synced ${DEFAULT_LABELS.length} labels.`);
+  });
+
+const fieldsCmd = program.command('fields').description('Manage pr-flow GitHub organization Issue Fields');
+
+fieldsCmd
+  .command('sync')
+  .description('Idempotently create the pr-flow-status Single-Select Issue Field in the target GitHub organization')
+  .option('--field-name <name>', 'Issue Field name', 'pr-flow-status')
+  .option('--repo <owner/repo>', 'GitHub repository (defaults to GITHUB_REPOSITORY)')
+  .action(async (opts) => {
+    const github = createGitHubFromEnv(opts.repo, opts.fieldName);
+    await runOrExit(github.ensureStatusField());
+    console.log(`Synced "${opts.fieldName}" Issue Field.`);
   });
 
 const planCmd = program.command('plan').description('Validate and materialize plan manifests');
@@ -176,7 +196,7 @@ planCmd
 
 program
   .command('claim')
-  .description('Run deterministic FSM pickup guards and claim an issue into status:in-progress')
+  .description('Run deterministic FSM pickup guards and claim an issue into pr-flow-status: in-progress')
   .requiredOption('--issue <number>', 'Issue number')
   .option('--config <path>', 'Path to pr-flow.config.yml', 'pr-flow.config.yml')
   .option('--repo <owner/repo>', 'GitHub repository')
@@ -483,7 +503,7 @@ program
 
 program
   .command('merge')
-  .description('Merge an approved ai-managed pull request and transition its linked issue to status:fixed')
+  .description('Merge an approved ai-managed pull request and transition its linked issue to pr-flow-status: fixed')
   .requiredOption('--pr <number>', 'Pull request number')
   .option('--issue <number>', 'Linked issue number (optional)', '0')
   .option('--config <path>', 'Path to pr-flow.config.yml', 'pr-flow.config.yml')

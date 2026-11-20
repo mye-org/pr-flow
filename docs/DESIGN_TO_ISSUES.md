@@ -12,13 +12,11 @@ epic:
   id: epic-auth
   title: "Epic: User Authentication"
   body: "End-to-end authentication"
-  priority: p1
 
 issues:
   - id: story-core
     title: "Story: Token Service"
     type: story
-    priority: p1
   - id: task-jwt
     title: "Implement JWT signing"
     type: task
@@ -41,4 +39,4 @@ pr-flow plan validate --file plan-manifest.yml
 GITHUB_TOKEN=$(gh auth token) pr-flow plan materialize --file plan-manifest.yml --repo <owner>/<repo>
 ```
 
-Issues with `blockedBy` entries are initialized as `status:blocked-dep`; unblocked leaf issues are initialized as `status:ready`.
+Issues with `blockedBy` entries are initialized with `pr-flow-status` = `blocked-dep`; unblocked leaf issues are initialized with `pr-flow-status` = `ready`.

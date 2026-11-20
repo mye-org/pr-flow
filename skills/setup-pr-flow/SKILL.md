@@ -32,6 +32,7 @@ npx --yes github:mingqianye/pr-flow#v1 init \
 This generates:
 - `pr-flow.config.yml`
 - `AGENTS.md`
+- `.agents/skills/pr-flow/SKILL.md`
 - `.github/workflows/pr-flow-implement.yml`
 - `.github/workflows/pr-flow-review.yml`
 - `.github/workflows/pr-flow-sync.yml`
@@ -41,12 +42,13 @@ This generates:
 
 Update `AGENTS.md` with any repository-specific architectural conventions, directory layouts, or testing rules that the AI coding agent should follow during automated issue execution.
 
-## Step 4: Sync GitHub Labels
+## Step 4: Sync GitHub Labels & `pr-flow-status` Issue Field
 
-Ensure all `status:*`, `type:*`, `priority:*`, and `ai-managed` labels exist in the target repository:
+Ensure all `type:*` and `ai-managed` labels exist in the target repository, and the `pr-flow-status` Single-Select Issue Field exists in the organization:
 
 ```bash
 GITHUB_TOKEN=$(gh auth token) npx --yes github:mingqianye/pr-flow#v1 labels sync --repo <owner>/<repo>
+GITHUB_TOKEN=$(gh auth token) npx --yes github:mingqianye/pr-flow#v1 fields sync --repo <owner>/<repo>
 ```
 
 ## Step 5: Verify & Remind About Secrets

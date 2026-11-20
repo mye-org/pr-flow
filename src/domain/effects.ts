@@ -2,7 +2,7 @@ import type { IssueStatus } from './issue.js';
 
 export type Effect =
   | {
-      type: 'SWAP_STATUS_LABEL';
+      type: 'SET_STATUS_FIELD';
       issueNumber: number;
       from: IssueStatus | null;
       to: IssueStatus;

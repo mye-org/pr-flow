@@ -11,23 +11,38 @@ export type IssueStatus =
 
 export type IssueType = 'epic' | 'story' | 'task' | 'bug';
 
-export type Priority = 'p0' | 'p1' | 'p2' | 'p3';
-
 export const AI_MANAGED_LABEL = 'ai-managed';
+export const PR_FLOW_STATUS_FIELD_NAME = 'pr-flow-status';
 
-export const STATUS_TO_LABEL: Record<IssueStatus, string> = {
-  backlog: 'status:backlog',
-  blocked_dep: 'status:blocked-dep',
-  ready: 'status:ready',
-  in_progress: 'status:in-progress',
-  review_pending: 'status:review-pending',
-  fixed: 'status:fixed',
-  needs_human: 'status:needs-human',
+export const STATUS_TO_FIELD_VALUE: Record<IssueStatus, string> = {
+  backlog: 'backlog',
+  blocked_dep: 'blocked-dep',
+  ready: 'ready',
+  in_progress: 'in-progress',
+  review_pending: 'review-pending',
+  fixed: 'fixed',
+  needs_human: 'needs-human',
 };
 
-export const LABEL_TO_STATUS: Record<string, IssueStatus> = Object.fromEntries(
-  Object.entries(STATUS_TO_LABEL).map(([status, label]) => [label, status as IssueStatus]),
+export const FIELD_VALUE_TO_STATUS: Record<string, IssueStatus> = Object.fromEntries(
+  Object.entries(STATUS_TO_FIELD_VALUE).map(([status, value]) => [value, status as IssueStatus]),
 ) as Record<string, IssueStatus>;
+
+export interface IssueFieldOptionDefinition {
+  name: string;
+  color: string;
+  description: string;
+}
+
+export const PR_FLOW_STATUS_OPTIONS: readonly IssueFieldOptionDefinition[] = [
+  { name: 'backlog', color: 'GRAY', description: 'Unrefined or not yet scheduled' },
+  { name: 'blocked-dep', color: 'ORANGE', description: 'Blocked by open upstream dependencies' },
+  { name: 'ready', color: 'GREEN', description: 'Ready for automated AI pickup' },
+  { name: 'in-progress', color: 'YELLOW', description: 'Claimed and actively executing (counts toward WIP limit)' },
+  { name: 'review-pending', color: 'BLUE', description: 'PR opened and awaiting human review (uncapped WIP)' },
+  { name: 'fixed', color: 'PURPLE', description: 'PR merged and issue resolved' },
+  { name: 'needs-human', color: 'RED', description: 'Requires human intervention or clarification' },
+];
 
 export const TYPE_TO_LABEL: Record<IssueType, string> = {
   epic: 'type:epic',
@@ -40,17 +55,6 @@ export const LABEL_TO_TYPE: Record<string, IssueType> = Object.fromEntries(
   Object.entries(TYPE_TO_LABEL).map(([type, label]) => [label, type as IssueType]),
 ) as Record<string, IssueType>;
 
-export const PRIORITY_TO_LABEL: Record<Priority, string> = {
-  p0: 'priority:p0',
-  p1: 'priority:p1',
-  p2: 'priority:p2',
-  p3: 'priority:p3',
-};
-
-export const LABEL_TO_PRIORITY: Record<string, Priority> = Object.fromEntries(
-  Object.entries(PRIORITY_TO_LABEL).map(([priority, label]) => [label, priority as Priority]),
-) as Record<string, Priority>;
-
 export interface LabelDefinition {
   name: string;
   color: string;
@@ -58,21 +62,10 @@ export interface LabelDefinition {
 }
 
 export const DEFAULT_LABELS: readonly LabelDefinition[] = [
-  { name: 'status:backlog', color: 'ededed', description: 'Unrefined or not yet scheduled' },
-  { name: 'status:blocked-dep', color: 'd93f0b', description: 'Blocked by open upstream dependencies' },
-  { name: 'status:ready', color: '0e8a16', description: 'Ready for automated AI pickup' },
-  { name: 'status:in-progress', color: 'fbca04', description: 'Claimed and actively executing (counts toward WIP limit)' },
-  { name: 'status:review-pending', color: '1d76db', description: 'PR opened and awaiting human review (uncapped WIP)' },
-  { name: 'status:fixed', color: '6f42c1', description: 'PR merged and issue resolved' },
-  { name: 'status:needs-human', color: 'b60205', description: 'Requires human intervention or clarification' },
   { name: 'type:epic', color: '3e4b9e', description: 'Top-level Agile Epic container (status rolls up)' },
   { name: 'type:story', color: '5319e7', description: 'User Story (container if it has sub-issues, leaf otherwise)' },
   { name: 'type:task', color: '006b75', description: 'Executable engineering task (1 PR per issue)' },
   { name: 'type:bug', color: 'd73a4a', description: 'Executable bug fix (1 PR per issue)' },
-  { name: 'priority:p0', color: 'b60205', description: 'Critical priority' },
-  { name: 'priority:p1', color: 'd93f0b', description: 'High priority' },
-  { name: 'priority:p2', color: 'fbca04', description: 'Medium priority' },
-  { name: 'priority:p3', color: 'c2e0c6', description: 'Low priority' },
   { name: AI_MANAGED_LABEL, color: '0052cc', description: 'Managed by pr-flow automation' },
 ];
 
@@ -83,7 +76,6 @@ export interface IssueNode {
   state: 'open' | 'closed';
   status: IssueStatus;
   type: IssueType;
-  priority: Priority;
   labels: string[];
   subIssueNumbers: number[];
   blockedByNumbers: number[];
@@ -111,12 +103,9 @@ export function branchNameForIssue(issueNumber: number): string {
   return `ai/issue-${issueNumber}`;
 }
 
-export function extractStatusFromLabels(labels: readonly string[]): IssueStatus {
-  for (const label of labels) {
-    const status = LABEL_TO_STATUS[label];
-    if (status) return status;
-  }
-  return 'backlog';
+export function extractStatusFromFieldValue(value: string | null | undefined): IssueStatus {
+  if (!value) return 'backlog';
+  return FIELD_VALUE_TO_STATUS[value] ?? 'backlog';
 }
 
 export function extractTypeFromLabels(labels: readonly string[]): IssueType {
@@ -125,14 +114,6 @@ export function extractTypeFromLabels(labels: readonly string[]): IssueType {
     if (issueType) return issueType;
   }
   return 'task';
-}
-
-export function extractPriorityFromLabels(labels: readonly string[]): Priority {
-  for (const label of labels) {
-    const priority = LABEL_TO_PRIORITY[label];
-    if (priority) return priority;
-  }
-  return 'p2';
 }
 
 export const AgentResultSchema = z.object({

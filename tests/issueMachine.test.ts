@@ -12,8 +12,7 @@ function makeIssue(overrides: Partial<IssueNode> = {}): IssueNode {
     state: 'open',
     status: 'ready',
     type: 'task',
-    priority: 'p1',
-    labels: ['type:task', 'status:ready', 'priority:p1'],
+    labels: ['type:task', 'ai-managed'],
     subIssueNumbers: [],
     blockedByNumbers: [],
     blockingNumbers: [],
@@ -119,7 +118,7 @@ describe('issueMachine transitions', () => {
     expect(claimed.changed).toBe(true);
     expect(claimed.nextStatus).toBe('in_progress');
     expect(claimed.effects).toEqual([
-      { type: 'SWAP_STATUS_LABEL', issueNumber: 42, from: 'ready', to: 'in_progress' },
+      { type: 'SET_STATUS_FIELD', issueNumber: 42, from: 'ready', to: 'in_progress' },
     ]);
 
     const prOpened = transitionIssue(
@@ -133,7 +132,7 @@ describe('issueMachine transitions', () => {
     );
     expect(prOpened.nextStatus).toBe('review_pending');
     expect(prOpened.effects[0]).toEqual({
-      type: 'SWAP_STATUS_LABEL',
+      type: 'SET_STATUS_FIELD',
       issueNumber: 42,
       from: 'in_progress',
       to: 'review_pending',
@@ -145,7 +144,7 @@ describe('issueMachine transitions', () => {
     );
     expect(merged.nextStatus).toBe('fixed');
     expect(merged.effects).toEqual([
-      { type: 'SWAP_STATUS_LABEL', issueNumber: 42, from: 'review_pending', to: 'fixed' },
+      { type: 'SET_STATUS_FIELD', issueNumber: 42, from: 'review_pending', to: 'fixed' },
       { type: 'CLOSE_ISSUE', issueNumber: 42 },
     ]);
   });
@@ -175,7 +174,7 @@ describe('issueMachine transitions', () => {
     });
     expect(res.nextStatus).toBe('ready');
     expect(res.effects).toEqual([
-      { type: 'SWAP_STATUS_LABEL', issueNumber: 42, from: 'in_progress', to: 'ready' },
+      { type: 'SET_STATUS_FIELD', issueNumber: 42, from: 'in_progress', to: 'ready' },
       expect.objectContaining({
         type: 'ADD_COMMENT',
         issueNumber: 42,
@@ -193,7 +192,7 @@ describe('issueMachine transitions', () => {
     });
     expect(res.nextStatus).toBe('needs_human');
     expect(res.effects[0]).toEqual({
-      type: 'SWAP_STATUS_LABEL',
+      type: 'SET_STATUS_FIELD',
       issueNumber: 42,
       from: 'in_progress',
       to: 'needs_human',

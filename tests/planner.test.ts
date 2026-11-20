@@ -76,11 +76,16 @@ issues:
     let nextNum = 10;
     const subLinks: Array<[number, number]> = [];
     const depLinks: Array<[number, number]> = [];
+    const statusUpdates: Array<[number, string]> = [];
 
     const mockGitHub: Partial<GitHubPort> = {
       createIssue: () => {
         const num = nextNum++;
         return TE.right({ number: num, url: `https://github.com/o/r/issues/${num}` });
+      },
+      setIssueStatus: (issueNumber, status) => {
+        statusUpdates.push([issueNumber, status]);
+        return TE.right(undefined);
       },
       addSubIssue: (parent, child) => {
         subLinks.push([parent, child]);
@@ -96,6 +101,7 @@ issues:
     expect(E.isRight(res)).toBe(true);
     if (E.isRight(res)) {
       expect(Object.keys(res.right.createdIssues)).toHaveLength(4);
+      expect(statusUpdates).toHaveLength(4);
       expect(subLinks).toHaveLength(3);
       expect(depLinks).toHaveLength(1);
     }

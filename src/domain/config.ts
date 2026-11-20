@@ -7,6 +7,7 @@ export const PrFlowConfigSchema = z.object({
   version: z.literal(1),
   wipLimit: z.number().int().min(1).default(4),
   baseBranch: z.string().min(1).default('main'),
+  statusFieldName: z.string().min(1).default('pr-flow-status'),
   workspace: z.object({
     setupCommand: z.string().default(''),
     verifyCommand: z.string().min(1),

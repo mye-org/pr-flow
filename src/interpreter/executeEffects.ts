@@ -4,22 +4,13 @@ import { match } from 'ts-pattern';
 import type { GitHubPort } from '../adapters/github/types.js';
 import type { Effect } from '../domain/effects.js';
 import type { DomainError } from '../domain/errors.js';
-import { STATUS_TO_LABEL } from '../domain/issue.js';
 
 export function executeEffect(
   effect: Effect,
   github: GitHubPort,
 ): TE.TaskEither<DomainError, void> {
   return match(effect)
-    .with({ type: 'SWAP_STATUS_LABEL' }, (e) => {
-      const removeOld = e.from
-        ? github.removeLabel(e.issueNumber, STATUS_TO_LABEL[e.from])
-        : TE.right<DomainError, void>(undefined);
-      return pipe(
-        removeOld,
-        TE.chain(() => github.addLabels(e.issueNumber, [STATUS_TO_LABEL[e.to]])),
-      );
-    })
+    .with({ type: 'SET_STATUS_FIELD' }, (e) => github.setIssueStatus(e.issueNumber, e.to))
     .with({ type: 'ADD_COMMENT' }, (e) => github.addComment(e.issueNumber, e.body))
     .with({ type: 'CLOSE_ISSUE' }, (e) => github.closeIssue(e.issueNumber))
     .with({ type: 'REOPEN_ISSUE' }, (e) => github.reopenIssue(e.issueNumber))

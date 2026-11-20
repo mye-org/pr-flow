@@ -4,15 +4,15 @@ The issue lifecycle is modeled as a deterministic **XState v5** machine (`src/ma
 
 ## States
 
-| State | Label | Meaning |
+| State | `pr-flow-status` Field Value | Meaning |
 | --- | --- | --- |
-| `backlog` | `status:backlog` | Unrefined or not yet scheduled |
-| `blocked_dep` | `status:blocked-dep` | Blocked by one or more open `blocked_by` issues |
-| `ready` | `status:ready` | Eligible for automated AI pickup |
-| `in_progress` | `status:in-progress` | Claimed by `pr-flow` and actively executing (counts toward WIP) |
-| `review_pending` | `status:review-pending` | PR opened and awaiting human review (uncapped WIP) |
-| `fixed` | `status:fixed` | PR merged and issue closed |
-| `needs_human` | `status:needs-human` | Execution failed or agent requested human clarification |
+| `backlog` | `backlog` | Unrefined or not yet scheduled |
+| `blocked_dep` | `blocked-dep` | Blocked by one or more open `blocked_by` issues |
+| `ready` | `ready` | Eligible for automated AI pickup |
+| `in_progress` | `in-progress` | Claimed by `pr-flow` and actively executing (counts toward WIP) |
+| `review_pending` | `review-pending` | PR opened and awaiting human review (uncapped WIP) |
+| `fixed` | `fixed` | PR merged and issue closed |
+| `needs_human` | `needs-human` | Execution failed or agent requested human clarification |
 
 ## Transitions
 
@@ -36,4 +36,4 @@ Before claiming an issue, `pr-flow claim` verifies:
 2. `issue.status === 'ready'` (`INVALID_STATE_FOR_PICKUP` otherwise)
 3. All `blocked_by` issues are `closed` (`BLOCKED_BY_DEPENDENCIES` otherwise)
 4. Zero open PRs exist for `ai/issue-<N>` (`PR_ALREADY_EXISTS` otherwise)
-5. Current `status:in-progress` count `< wipLimit` (`WIP_LIMIT_REACHED` otherwise)
+5. Current `in-progress` count `< wipLimit` (`WIP_LIMIT_REACHED` otherwise)

@@ -19,10 +19,11 @@
      --setup-command "npm ci" \
      --verify-command "npm test" \
      --sync-labels \
+     --sync-fields \
      --repo <owner>/<repo>
    ```
 2. Add `GEMINI_API_KEY` to your repository's GitHub Actions secrets.
-3. Label an executable leaf issue (`type:task`, `type:bug`, or leaf `type:story`) with `status:ready` to trigger automated implementation.
+3. Set the `pr-flow-status` Issue Field on an executable leaf issue (`type:task`, `type:bug`, or leaf `type:story`) to `ready` to trigger automated implementation.
 
 ## Documentation
 

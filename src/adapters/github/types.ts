@@ -1,6 +1,6 @@
 import type * as TE from 'fp-ts/TaskEither';
 import type { DomainError } from '../../domain/errors.js';
-import type { IssueNode, LabelDefinition } from '../../domain/issue.js';
+import type { IssueNode, IssueStatus, LabelDefinition } from '../../domain/issue.js';
 
 export interface CreateIssueInput {
   title: string;
@@ -38,6 +38,8 @@ export interface GitHubPort {
   createIssue(input: CreateIssueInput): TE.TaskEither<DomainError, { number: number; url: string }>;
   closeIssue(issueNumber: number): TE.TaskEither<DomainError, void>;
   reopenIssue(issueNumber: number): TE.TaskEither<DomainError, void>;
+  setIssueStatus(issueNumber: number, status: IssueStatus): TE.TaskEither<DomainError, void>;
+  ensureStatusField(): TE.TaskEither<DomainError, void>;
   addLabels(issueNumber: number, labels: string[]): TE.TaskEither<DomainError, void>;
   removeLabel(issueNumber: number, label: string): TE.TaskEither<DomainError, void>;
   addComment(issueNumber: number, body: string): TE.TaskEither<DomainError, void>;

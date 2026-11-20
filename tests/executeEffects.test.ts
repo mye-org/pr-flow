@@ -18,6 +18,8 @@ const mockGithub = (): GitHubPort => ({
   createIssue: vi.fn(),
   closeIssue: vi.fn(),
   reopenIssue: vi.fn(),
+  setIssueStatus: vi.fn(),
+  ensureStatusField: vi.fn(),
   addLabels: vi.fn(),
   removeLabel: vi.fn(),
   addComment: vi.fn(),
@@ -38,13 +40,12 @@ const mockGithub = (): GitHubPort => ({
 });
 
 describe('executeEffect', () => {
-  it('handles SWAP_STATUS_LABEL (with from status)', async () => {
+  it('handles SET_STATUS_FIELD (with from status)', async () => {
     const github = mockGithub();
-    (github.removeLabel as any).mockReturnValue(TE.right(undefined));
-    (github.addLabels as any).mockReturnValue(TE.right(undefined));
+    (github.setIssueStatus as any).mockReturnValue(TE.right(undefined));
 
     const effect: Effect = {
-      type: 'SWAP_STATUS_LABEL',
+      type: 'SET_STATUS_FIELD',
       issueNumber: 42,
       from: 'ready',
       to: 'in_progress',
@@ -53,17 +54,15 @@ describe('executeEffect', () => {
     const result = await executeEffect(effect, github)();
 
     expect(E.isRight(result)).toBe(true);
-    expect(github.removeLabel).toHaveBeenCalledWith(42, 'status:ready');
-    expect(github.addLabels).toHaveBeenCalledWith(42, ['status:in-progress']);
+    expect(github.setIssueStatus).toHaveBeenCalledWith(42, 'in_progress');
   });
 
-  it('handles SWAP_STATUS_LABEL (without from status)', async () => {
-
+  it('handles SET_STATUS_FIELD (without from status)', async () => {
     const github = mockGithub();
-    (github.addLabels as any).mockReturnValue(TE.right(undefined));
+    (github.setIssueStatus as any).mockReturnValue(TE.right(undefined));
 
     const effect: Effect = {
-      type: 'SWAP_STATUS_LABEL',
+      type: 'SET_STATUS_FIELD',
       issueNumber: 42,
       from: null,
       to: 'ready',
@@ -72,8 +71,7 @@ describe('executeEffect', () => {
     const result = await executeEffect(effect, github)();
 
     expect(E.isRight(result)).toBe(true);
-    expect(github.removeLabel).not.toHaveBeenCalled();
-    expect(github.addLabels).toHaveBeenCalledWith(42, ['status:ready']);
+    expect(github.setIssueStatus).toHaveBeenCalledWith(42, 'ready');
   });
 
   it('handles ADD_COMMENT', async () => {

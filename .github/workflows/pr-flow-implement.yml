@@ -2,7 +2,7 @@ name: pr-flow Implement
 
 on:
   issues:
-    types: [labeled, reopened]
+    types: [field_added, reopened]
   workflow_dispatch:
     inputs:
       issue_number:
@@ -23,7 +23,8 @@ jobs:
   implement:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      github.event.label.name == 'status:ready'
+      github.event.action == 'reopened' ||
+      github.event.action == 'field_added'
     uses: mingqianye/pr-flow/.github/workflows/reusable-implement.yml@v1
     with:
       issue_number: ${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.issue_number) || github.event.issue.number }}

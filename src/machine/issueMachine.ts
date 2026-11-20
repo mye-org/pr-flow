@@ -34,9 +34,9 @@ export const issueMachine = setup({
     },
   },
   actions: {
-    emitLabelSwap: assign(({ context }, params: { from: IssueStatus; to: IssueStatus }) => ({
+    emitStatusFieldSet: assign(({ context }, params: { from: IssueStatus; to: IssueStatus }) => ({
       effects: appendEffect(context.effects, {
-        type: 'SWAP_STATUS_LABEL',
+        type: 'SET_STATUS_FIELD',
         issueNumber: context.issueNumber,
         from: params.from,
         to: params.to,
@@ -74,11 +74,11 @@ export const issueMachine = setup({
       on: {
         DEPS_BLOCKED: {
           target: 'blocked_dep',
-          actions: { type: 'emitLabelSwap', params: { from: 'backlog', to: 'blocked_dep' } },
+          actions: { type: 'emitStatusFieldSet', params: { from: 'backlog', to: 'blocked_dep' } },
         },
         DEPS_RESOLVED: {
           target: 'ready',
-          actions: { type: 'emitLabelSwap', params: { from: 'backlog', to: 'ready' } },
+          actions: { type: 'emitStatusFieldSet', params: { from: 'backlog', to: 'ready' } },
         },
       },
     },
@@ -87,10 +87,10 @@ export const issueMachine = setup({
         DEPS_RESOLVED: {
           target: 'ready',
           actions: [
-            { type: 'emitLabelSwap', params: { from: 'blocked_dep', to: 'ready' } },
+            { type: 'emitStatusFieldSet', params: { from: 'blocked_dep', to: 'ready' } },
             {
               type: 'emitComment',
-              params: { body: 'All upstream dependencies are closed. Issue is now `status:ready`.' },
+              params: { body: 'All upstream dependencies are closed. Issue `pr-flow-status` is now `ready`.' },
             },
           ],
         },
@@ -101,13 +101,13 @@ export const issueMachine = setup({
         DEPS_BLOCKED: {
           target: 'blocked_dep',
           actions: [
-            { type: 'emitLabelSwap', params: { from: 'ready', to: 'blocked_dep' } },
+            { type: 'emitStatusFieldSet', params: { from: 'ready', to: 'blocked_dep' } },
           ],
         },
         PICKUP_REQUESTED: {
           guard: 'canPickup',
           target: 'in_progress',
-          actions: { type: 'emitLabelSwap', params: { from: 'ready', to: 'in_progress' } },
+          actions: { type: 'emitStatusFieldSet', params: { from: 'ready', to: 'in_progress' } },
         },
       },
     },
@@ -116,7 +116,7 @@ export const issueMachine = setup({
         EXECUTION_SUCCEEDED: {
           target: 'review_pending',
           actions: [
-            { type: 'emitLabelSwap', params: { from: 'in_progress', to: 'review_pending' } },
+            { type: 'emitStatusFieldSet', params: { from: 'in_progress', to: 'review_pending' } },
             assign(({ context, event }) => ({
               effects: appendEffect(context.effects, {
                 type: 'ADD_COMMENT',
@@ -129,7 +129,7 @@ export const issueMachine = setup({
         EXECUTION_FAILED: {
           target: 'needs_human',
           actions: [
-            { type: 'emitLabelSwap', params: { from: 'in_progress', to: 'needs_human' } },
+            { type: 'emitStatusFieldSet', params: { from: 'in_progress', to: 'needs_human' } },
             assign(({ context, event }) => ({
               effects: appendEffect(context.effects, {
                 type: 'ADD_COMMENT',
@@ -144,12 +144,12 @@ export const issueMachine = setup({
             guard: 'canRetry',
             target: 'ready',
             actions: [
-              { type: 'emitLabelSwap', params: { from: 'in_progress', to: 'ready' } },
+              { type: 'emitStatusFieldSet', params: { from: 'in_progress', to: 'ready' } },
               assign(({ context, event }) => ({
                 effects: appendEffect(context.effects, {
                   type: 'ADD_COMMENT',
                   issueNumber: context.issueNumber,
-                  body: `<!-- pr-flow:retries=${event.retryCount + 1} -->\nTransient agent API error (attempt ${event.retryCount + 1}/${event.maxRetries}); re-queued to \`status:ready\` for automatic retry.\n\n**Reason:** ${event.reason}`,
+                  body: `<!-- pr-flow:retries=${event.retryCount + 1} -->\nTransient agent API error (attempt ${event.retryCount + 1}/${event.maxRetries}); re-queued \`pr-flow-status\` to \`ready\` for automatic retry.\n\n**Reason:** ${event.reason}`,
                 }),
               })),
             ],
@@ -157,7 +157,7 @@ export const issueMachine = setup({
           {
             target: 'needs_human',
             actions: [
-              { type: 'emitLabelSwap', params: { from: 'in_progress', to: 'needs_human' } },
+              { type: 'emitStatusFieldSet', params: { from: 'in_progress', to: 'needs_human' } },
               assign(({ context, event }) => ({
                 effects: appendEffect(context.effects, {
                   type: 'ADD_COMMENT',
@@ -171,7 +171,7 @@ export const issueMachine = setup({
         NEEDS_HUMAN_DETECTED: {
           target: 'needs_human',
           actions: [
-            { type: 'emitLabelSwap', params: { from: 'in_progress', to: 'needs_human' } },
+            { type: 'emitStatusFieldSet', params: { from: 'in_progress', to: 'needs_human' } },
             assign(({ context, event }) => ({
               effects: appendEffect(context.effects, {
                 type: 'ADD_COMMENT',
@@ -187,12 +187,12 @@ export const issueMachine = setup({
       on: {
         REVIEW_CHANGES_REQUESTED: {
           target: 'in_progress',
-          actions: { type: 'emitLabelSwap', params: { from: 'review_pending', to: 'in_progress' } },
+          actions: { type: 'emitStatusFieldSet', params: { from: 'review_pending', to: 'in_progress' } },
         },
         PR_MERGED: {
           target: 'fixed',
           actions: [
-            { type: 'emitLabelSwap', params: { from: 'review_pending', to: 'fixed' } },
+            { type: 'emitStatusFieldSet', params: { from: 'review_pending', to: 'fixed' } },
             { type: 'emitCloseIssue' },
           ],
         },
@@ -204,14 +204,14 @@ export const issueMachine = setup({
               effects: appendEffect(context.effects, {
                 type: 'ADD_COMMENT',
                 issueNumber: context.issueNumber,
-                body: `<!-- pr-flow:retries=${event.retryCount + 1} -->\nTransient agent API error during review follow-up (attempt ${event.retryCount + 1}/${event.maxRetries}); keeping in \`status:review-pending\`.\n\n**Reason:** ${event.reason}`,
+                body: `<!-- pr-flow:retries=${event.retryCount + 1} -->\nTransient agent API error during review follow-up (attempt ${event.retryCount + 1}/${event.maxRetries}); keeping \`pr-flow-status\` in \`review-pending\`.\n\n**Reason:** ${event.reason}`,
               }),
             })),
           },
           {
             target: 'needs_human',
             actions: [
-              { type: 'emitLabelSwap', params: { from: 'review_pending', to: 'needs_human' } },
+              { type: 'emitStatusFieldSet', params: { from: 'review_pending', to: 'needs_human' } },
               assign(({ context, event }) => ({
                 effects: appendEffect(context.effects, {
                   type: 'ADD_COMMENT',
@@ -225,7 +225,7 @@ export const issueMachine = setup({
         EXECUTION_FAILED: {
           target: 'needs_human',
           actions: [
-            { type: 'emitLabelSwap', params: { from: 'review_pending', to: 'needs_human' } },
+            { type: 'emitStatusFieldSet', params: { from: 'review_pending', to: 'needs_human' } },
             assign(({ context, event }) => ({
               effects: appendEffect(context.effects, {
                 type: 'ADD_COMMENT',
@@ -241,11 +241,11 @@ export const issueMachine = setup({
       on: {
         HUMAN_REQUEUED: {
           target: 'ready',
-          actions: { type: 'emitLabelSwap', params: { from: 'needs_human', to: 'ready' } },
+          actions: { type: 'emitStatusFieldSet', params: { from: 'needs_human', to: 'ready' } },
         },
         DEPS_BLOCKED: {
           target: 'blocked_dep',
-          actions: { type: 'emitLabelSwap', params: { from: 'needs_human', to: 'blocked_dep' } },
+          actions: { type: 'emitStatusFieldSet', params: { from: 'needs_human', to: 'blocked_dep' } },
         },
       },
     },
@@ -255,7 +255,7 @@ export const issueMachine = setup({
           target: 'ready',
           actions: [
             { type: 'emitReopenIssue' },
-            { type: 'emitLabelSwap', params: { from: 'fixed', to: 'ready' } },
+            { type: 'emitStatusFieldSet', params: { from: 'fixed', to: 'ready' } },
           ],
         },
       },

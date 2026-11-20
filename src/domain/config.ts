@@ -14,7 +14,7 @@ export const PrFlowConfigSchema = z.object({
   agent: z
     .object({
       provider: z.enum(['gemini', 'custom']).default('gemini'),
-      model: z.string().default('gemini-2.5-pro'),
+      model: z.string().default('gemini-3.1-pro-preview'),
       command: z.string().optional(),
       timeoutMinutes: z.number().int().min(1).default(20),
     })

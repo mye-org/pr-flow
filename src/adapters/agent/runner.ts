@@ -61,10 +61,15 @@ export function runAgentExecution(params: {
     agentCommand = config.agent.command!;
   }
 
+  const nodeOpts = [process.env.NODE_OPTIONS, '--dns-result-order=ipv4first']
+    .filter(Boolean)
+    .join(' ');
+
   const agentRun = runShell(agentCommand, cwd, {
     PR_FLOW_PROMPT_FILE: promptPath,
     PR_FLOW_RESULT_FILE: resultPath,
     GEMINI_CLI_TRUST_WORKSPACE: 'true',
+    NODE_OPTIONS: nodeOpts,
   });
 
   // Always check if result.json was written
@@ -82,6 +87,9 @@ export function runAgentExecution(params: {
   }
 
   if (!agentRun.ok && !parsedResult) {
+    if (agentRun.output.length > 0) {
+      console.error('--- Agent CLI Output ---\n' + agentRun.output + '\n--- End Agent CLI Output ---');
+    }
     return E.left({
       type: 'AGENT_EXECUTION_ERROR',
       message: `Agent CLI exited with code ${agentRun.status}: ${agentRun.output.slice(-1500)}`,

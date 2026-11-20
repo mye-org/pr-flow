@@ -1,0 +1,26 @@
+name: pr-flow Implement
+
+on:
+  issues:
+    types: [labeled, reopened]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to implement'
+        required: true
+        type: number
+
+concurrency:
+  group: fsm-dispatcher
+  cancel-in-progress: false
+
+jobs:
+  implement:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.label.name == 'status:ready'
+    uses: mingqianye/pr-flow/.github/workflows/reusable-implement.yml@v1
+    with:
+      issue_number: ${{ github.event_name == 'workflow_dispatch' && inputs.issue_number || github.event.issue.number }}
+    secrets:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

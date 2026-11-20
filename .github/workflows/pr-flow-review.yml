@@ -1,0 +1,20 @@
+name: pr-flow Review Follow-up
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+concurrency:
+  group: pr-flow-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    if: >-
+      github.event.review.state == 'changes_requested' &&
+      contains(github.event.pull_request.labels.*.name, 'ai-managed')
+    uses: mingqianye/pr-flow/.github/workflows/reusable-review.yml@v1
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+    secrets:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

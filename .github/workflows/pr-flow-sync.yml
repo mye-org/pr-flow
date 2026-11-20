@@ -1,0 +1,19 @@
+name: pr-flow Sync
+
+on:
+  issues:
+    types: [closed, reopened, labeled, unlabeled]
+  pull_request:
+    types: [closed]
+
+concurrency:
+  group: fsm-dispatcher
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    uses: mingqianye/pr-flow/.github/workflows/reusable-sync.yml@v1
+    with:
+      issue_number: ${{ github.event.issue.number || 0 }}
+      pr_number: ${{ github.event.pull_request.number || 0 }}
+      pr_merged: ${{ github.event.pull_request.merged || false }}

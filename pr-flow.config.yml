@@ -1,0 +1,16 @@
+version: 1
+wipLimit: 4
+baseBranch: main
+
+workspace:
+  setupCommand: "npm ci"
+  verifyCommand: "npm run verify"
+
+agent:
+  provider: gemini
+  model: gemini-2.5-pro
+  timeoutMinutes: 20
+
+triggers:
+  reviewMode: changes_requested
+  autoPickup: true

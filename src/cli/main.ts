@@ -482,6 +482,38 @@ program
   });
 
 program
+  .command('merge')
+  .description('Merge an approved ai-managed pull request and transition its linked issue to status:fixed')
+  .requiredOption('--pr <number>', 'Pull request number')
+  .option('--issue <number>', 'Linked issue number (optional)', '0')
+  .option('--config <path>', 'Path to pr-flow.config.yml', 'pr-flow.config.yml')
+  .option('--repo <owner/repo>', 'GitHub repository')
+  .action(async (opts) => {
+    const prNumber = Number(opts.pr);
+    const issueNumber = Number(opts.issue);
+    const configPath = path.resolve(opts.config);
+    const config = fs.existsSync(configPath) ? loadConfigFromDisk(opts.config) : null;
+    const autoMerge = config ? config.triggers.autoMergeOnApprove : true;
+    const mergeMethod = config ? config.triggers.mergeMethod : 'squash';
+
+    if (!autoMerge) {
+      console.log(JSON.stringify({ merged: false, reason: 'triggers.autoMergeOnApprove is false' }));
+      return;
+    }
+
+    const github = createGitHubFromEnv(opts.repo);
+    await runOrExit(github.mergePullRequest(prNumber, mergeMethod));
+
+    if (issueNumber > 0) {
+      const issue = await runOrExit(github.getIssue(issueNumber));
+      const tr = transitionIssue(issue, { type: 'PR_MERGED', prNumber });
+      await runOrExit(executeEffects(tr.effects, github));
+    }
+
+    console.log(JSON.stringify({ merged: true, prNumber, mergeMethod, issueNumber }));
+  });
+
+program
   .command('sync')
   .description('Synchronize dependency states and parent rollups after issue or PR events')
   .option('--issue <number>', 'Issue number that changed', '0')
@@ -597,6 +629,36 @@ program
           }),
         );
         availableSlots--;
+        dispatched++;
+      }
+
+      // Also auto-retry open ai-managed PRs with unaddressed CHANGES_REQUESTED past cooldown
+      const managedPrs = await runOrExit(github.listOpenAiManagedPrs());
+      for (const pr of managedPrs) {
+        if (pr.latestReviewState !== 'CHANGES_REQUESTED') continue;
+        const linkedIssue = byNumber.get(pr.issueNumber);
+        if (!linkedIssue || linkedIssue.state !== 'open' || linkedIssue.status !== 'review_pending') {
+          continue;
+        }
+        const ageMs = now - Date.parse(pr.updatedAt);
+        if (!Number.isNaN(ageMs) && ageMs < cooldownMs) continue;
+
+        const comments = await runOrExit(github.listIssueComments(pr.issueNumber));
+        let retryCount = 0;
+        for (const body of comments) {
+          const matches = body.matchAll(/<!--\s*pr-flow:retries=(\d+)\s*-->/g);
+          for (const m of matches) {
+            const n = Number(m[1]);
+            if (!Number.isNaN(n) && n > retryCount) retryCount = n;
+          }
+        }
+        if (retryCount >= config.agent.maxRetries) continue;
+
+        await runOrExit(
+          github.dispatchWorkflow('pr-flow-review.yml', config.baseBranch, {
+            pr_number: String(pr.number),
+          }),
+        );
         dispatched++;
       }
     }

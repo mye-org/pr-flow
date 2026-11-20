@@ -45,13 +45,15 @@ agent:
   model: gemini-3.8-flash
   fallbackModels:
     - gemini-3-flash-preview
-    - gemini-2.5-flash-lite
+    - gemini-3.5-flash-lite
   maxRetries: 3
   timeoutMinutes: 20
 
 triggers:
   reviewMode: ${opts.reviewMode}
   autoPickup: true
+  autoMergeOnApprove: true
+  mergeMethod: squash
 `;
 
   const agentsMdContent = `# AGENTS.md
@@ -81,7 +83,7 @@ on:
         type: number
 
 concurrency:
-  group: fsm-dispatcher
+  group: fsm-implement-\${{ github.event.issue.number || inputs.issue_number }}
   cancel-in-progress: false
 
 permissions:
@@ -106,9 +108,15 @@ jobs:
 on:
   pull_request_review:
     types: [submitted]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to address review feedback on'
+        required: true
+        type: number
 
 concurrency:
-  group: pr-flow-review-\${{ github.event.pull_request.number }}
+  group: pr-flow-review-\${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: false
 
 permissions:
@@ -119,13 +127,23 @@ permissions:
 jobs:
   review:
     if: >-
-      github.event.review.state == 'changes_requested' &&
-      contains(github.event.pull_request.labels.*.name, 'ai-managed')
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.review.state == 'changes_requested' &&
+      contains(github.event.pull_request.labels.*.name, 'ai-managed'))
     uses: ${usesPrefix}/reusable-review.yml@${opts.prFlowRef}
     with:
-      pr_number: \${{ github.event.pull_request.number }}
+      pr_number: \${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.pr_number) || github.event.pull_request.number }}
     secrets:
       GEMINI_API_KEY: \${{ secrets.GEMINI_API_KEY }}
+
+  merge:
+    if: >-
+      github.event_name == 'pull_request_review' &&
+      github.event.review.state == 'approved' &&
+      contains(github.event.pull_request.labels.*.name, 'ai-managed')
+    uses: ${usesPrefix}/reusable-merge.yml@${opts.prFlowRef}
+    with:
+      pr_number: \${{ github.event.pull_request.number }}
 `;
 
   const syncWorkflow = `name: pr-flow Sync
@@ -137,7 +155,7 @@ on:
     types: [closed]
 
 concurrency:
-  group: fsm-dispatcher
+  group: fsm-sync
   cancel-in-progress: false
 
 permissions:

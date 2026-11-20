@@ -14,6 +14,7 @@ import type {
   CreateIssueInput,
   CreatePullRequestInput,
   GitHubPort,
+  ManagedPrSummary,
   PullRequestSummary,
 } from './types.js';
 
@@ -440,6 +441,46 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
+  listOpenAiManagedPrs(): TE.TaskEither<DomainError, ManagedPrSummary[]> {
+    return TE.tryCatch(
+      async () => {
+        const prs = await this.octokit.paginate(this.octokit.rest.pulls.list, {
+          owner: this.owner,
+          repo: this.repo,
+          state: 'open',
+          per_page: 100,
+        });
+        const results: ManagedPrSummary[] = [];
+        for (const pr of prs) {
+          const hasLabel = pr.labels.some((l) => l.name === 'ai-managed');
+          const match = /^ai\/issue-(\d+)$/.exec(pr.head.ref);
+          if (!hasLabel || !match) continue;
+          const issueNumber = Number(match[1]);
+
+          const reviews = await this.octokit.rest.pulls.listReviews({
+            owner: this.owner,
+            repo: this.repo,
+            pull_number: pr.number,
+          });
+          const decisive = reviews.data.filter(
+            (r) => r.state === 'CHANGES_REQUESTED' || r.state === 'APPROVED' || r.state === 'DISMISSED',
+          );
+          const latestReviewState = decisive.length > 0 ? decisive[decisive.length - 1]!.state : null;
+
+          results.push({
+            number: pr.number,
+            headRef: pr.head.ref,
+            issueNumber,
+            updatedAt: pr.updated_at,
+            latestReviewState,
+          });
+        }
+        return results;
+      },
+      (err) => toGitHubError('Failed to list open ai-managed PRs', err),
+    );
+  }
+
   createPullRequest(input: CreatePullRequestInput): TE.TaskEither<DomainError, PullRequestSummary> {
     return TE.tryCatch(
       async () => {
@@ -468,6 +509,23 @@ export class OctokitGitHubAdapter implements GitHubPort {
         };
       },
       (err) => toGitHubError(`Failed to create PR for branch ${input.head}`, err),
+    );
+  }
+
+  mergePullRequest(
+    prNumber: number,
+    method: 'squash' | 'merge' | 'rebase',
+  ): TE.TaskEither<DomainError, void> {
+    return TE.tryCatch(
+      async () => {
+        await this.octokit.rest.pulls.merge({
+          owner: this.owner,
+          repo: this.repo,
+          pull_number: prNumber,
+          merge_method: method,
+        });
+      },
+      (err) => toGitHubError(`Failed to merge PR #${prNumber}`, err),
     );
   }
 

@@ -15279,6 +15279,14 @@ function isTransientAgentError(output, timedOut) {
   if (timedOut) return true;
   return TRANSIENT_ERROR_PATTERNS.some((pattern) => pattern.test(output));
 }
+var MODEL_UNAVAILABLE_PATTERNS = [
+  /ModelNotFoundError/,
+  /is no longer available/i,
+  /\b404\b/
+];
+function isModelFallbackError(output, timedOut) {
+  return isTransientAgentError(output, timedOut) || MODEL_UNAVAILABLE_PATTERNS.some((pattern) => pattern.test(output));
+}
 function runShell(command, cwd, env, timeoutMs) {
   const res = (0, import_node_child_process.spawnSync)("bash", ["-lc", command], {
     cwd,
@@ -15336,14 +15344,17 @@ function runAgentExecution(params) {
     }
   }
   const nodeOpts = [process.env.NODE_OPTIONS, "--dns-result-order=ipv4first"].filter(Boolean).join(" ");
-  const timeoutMs = config.agent.timeoutMinutes * 6e4;
   const modelsToTry = config.agent.provider === "gemini" ? Array.from(/* @__PURE__ */ new Set([config.agent.model, ...config.agent.fallbackModels])) : ["custom"];
+  const perModelTimeoutMs = Math.max(
+    5 * 6e4,
+    Math.floor(config.agent.timeoutMinutes * 6e4 / modelsToTry.length)
+  );
   let parsedResult = null;
   let lastRun = null;
   for (let idx = 0; idx < modelsToTry.length; idx++) {
     const modelName = modelsToTry[idx];
     if (idx > 0) {
-      console.error(`[pr-flow] Falling back to model "${modelName}" after transient failure...`);
+      console.error(`[pr-flow] Falling back to model "${modelName}" after error...`);
       resetWorkingTree(cwd, outputDir);
       if (fs.existsSync(resultPath)) fs.unlinkSync(resultPath);
     }
@@ -15357,7 +15368,7 @@ function runAgentExecution(params) {
         GEMINI_CLI_TRUST_WORKSPACE: "true",
         NODE_OPTIONS: nodeOpts
       },
-      timeoutMs
+      perModelTimeoutMs
     );
     lastRun = agentRun;
     parsedResult = tryReadResult(resultPath);
@@ -15371,8 +15382,7 @@ ${agentRun.output}
 --- End Agent CLI Output ---`
       );
     }
-    const transient = isTransientAgentError(agentRun.output, agentRun.timedOut);
-    if (!transient) {
+    if (!isModelFallbackError(agentRun.output, agentRun.timedOut)) {
       break;
     }
   }
@@ -19348,6 +19358,43 @@ var OctokitGitHubAdapter = class {
       (err) => toGitHubError(`Failed to list open PRs for #${issueNumber}`, err)
     );
   }
+  listOpenAiManagedPrs() {
+    return tryCatch(
+      async () => {
+        const prs = await this.octokit.paginate(this.octokit.rest.pulls.list, {
+          owner: this.owner,
+          repo: this.repo,
+          state: "open",
+          per_page: 100
+        });
+        const results = [];
+        for (const pr of prs) {
+          const hasLabel = pr.labels.some((l) => l.name === "ai-managed");
+          const match3 = /^ai\/issue-(\d+)$/.exec(pr.head.ref);
+          if (!hasLabel || !match3) continue;
+          const issueNumber = Number(match3[1]);
+          const reviews = await this.octokit.rest.pulls.listReviews({
+            owner: this.owner,
+            repo: this.repo,
+            pull_number: pr.number
+          });
+          const decisive = reviews.data.filter(
+            (r2) => r2.state === "CHANGES_REQUESTED" || r2.state === "APPROVED" || r2.state === "DISMISSED"
+          );
+          const latestReviewState = decisive.length > 0 ? decisive[decisive.length - 1].state : null;
+          results.push({
+            number: pr.number,
+            headRef: pr.head.ref,
+            issueNumber,
+            updatedAt: pr.updated_at,
+            latestReviewState
+          });
+        }
+        return results;
+      },
+      (err) => toGitHubError("Failed to list open ai-managed PRs", err)
+    );
+  }
   createPullRequest(input) {
     return tryCatch(
       async () => {
@@ -19376,6 +19423,19 @@ var OctokitGitHubAdapter = class {
         };
       },
       (err) => toGitHubError(`Failed to create PR for branch ${input.head}`, err)
+    );
+  }
+  mergePullRequest(prNumber, method) {
+    return tryCatch(
+      async () => {
+        await this.octokit.rest.pulls.merge({
+          owner: this.owner,
+          repo: this.repo,
+          pull_number: prNumber,
+          merge_method: method
+        });
+      },
+      (err) => toGitHubError(`Failed to merge PR #${prNumber}`, err)
     );
   }
   addPrComment(prNumber, body) {
@@ -19444,7 +19504,9 @@ var PrFlowConfigSchema = external_exports.object({
   }).default({}),
   triggers: external_exports.object({
     reviewMode: external_exports.enum(["changes_requested", "comment", "both"]).default("changes_requested"),
-    autoPickup: external_exports.boolean().default(true)
+    autoPickup: external_exports.boolean().default(true),
+    autoMergeOnApprove: external_exports.boolean().default(true),
+    mergeMethod: external_exports.enum(["squash", "merge", "rebase"]).default("squash")
   }).default({})
 });
 function parseConfig(yamlContent) {
@@ -23578,13 +23640,15 @@ agent:
   model: gemini-3.8-flash
   fallbackModels:
     - gemini-3-flash-preview
-    - gemini-2.5-flash-lite
+    - gemini-3.5-flash-lite
   maxRetries: 3
   timeoutMinutes: 20
 
 triggers:
   reviewMode: ${opts.reviewMode}
   autoPickup: true
+  autoMergeOnApprove: true
+  mergeMethod: squash
 `;
   const agentsMdContent = `# AGENTS.md
 
@@ -23612,7 +23676,7 @@ on:
         type: number
 
 concurrency:
-  group: fsm-dispatcher
+  group: fsm-implement-\${{ github.event.issue.number || inputs.issue_number }}
   cancel-in-progress: false
 
 permissions:
@@ -23636,9 +23700,15 @@ jobs:
 on:
   pull_request_review:
     types: [submitted]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to address review feedback on'
+        required: true
+        type: number
 
 concurrency:
-  group: pr-flow-review-\${{ github.event.pull_request.number }}
+  group: pr-flow-review-\${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: false
 
 permissions:
@@ -23649,13 +23719,23 @@ permissions:
 jobs:
   review:
     if: >-
-      github.event.review.state == 'changes_requested' &&
-      contains(github.event.pull_request.labels.*.name, 'ai-managed')
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.review.state == 'changes_requested' &&
+      contains(github.event.pull_request.labels.*.name, 'ai-managed'))
     uses: ${usesPrefix}/reusable-review.yml@${opts.prFlowRef}
     with:
-      pr_number: \${{ github.event.pull_request.number }}
+      pr_number: \${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.pr_number) || github.event.pull_request.number }}
     secrets:
       GEMINI_API_KEY: \${{ secrets.GEMINI_API_KEY }}
+
+  merge:
+    if: >-
+      github.event_name == 'pull_request_review' &&
+      github.event.review.state == 'approved' &&
+      contains(github.event.pull_request.labels.*.name, 'ai-managed')
+    uses: ${usesPrefix}/reusable-merge.yml@${opts.prFlowRef}
+    with:
+      pr_number: \${{ github.event.pull_request.number }}
 `;
   const syncWorkflow = `name: pr-flow Sync
 
@@ -23666,7 +23746,7 @@ on:
     types: [closed]
 
 concurrency:
-  group: fsm-dispatcher
+  group: fsm-sync
   cancel-in-progress: false
 
 permissions:
@@ -24087,6 +24167,26 @@ ${agentResult.summary}
     })
   );
 });
+program2.command("merge").description("Merge an approved ai-managed pull request and transition its linked issue to status:fixed").requiredOption("--pr <number>", "Pull request number").option("--issue <number>", "Linked issue number (optional)", "0").option("--config <path>", "Path to pr-flow.config.yml", "pr-flow.config.yml").option("--repo <owner/repo>", "GitHub repository").action(async (opts) => {
+  const prNumber = Number(opts.pr);
+  const issueNumber = Number(opts.issue);
+  const configPath = path3.resolve(opts.config);
+  const config = fs3.existsSync(configPath) ? loadConfigFromDisk(opts.config) : null;
+  const autoMerge = config ? config.triggers.autoMergeOnApprove : true;
+  const mergeMethod = config ? config.triggers.mergeMethod : "squash";
+  if (!autoMerge) {
+    console.log(JSON.stringify({ merged: false, reason: "triggers.autoMergeOnApprove is false" }));
+    return;
+  }
+  const github = createGitHubFromEnv(opts.repo);
+  await runOrExit(github.mergePullRequest(prNumber, mergeMethod));
+  if (issueNumber > 0) {
+    const issue = await runOrExit(github.getIssue(issueNumber));
+    const tr = transitionIssue(issue, { type: "PR_MERGED", prNumber });
+    await runOrExit(executeEffects(tr.effects, github));
+  }
+  console.log(JSON.stringify({ merged: true, prNumber, mergeMethod, issueNumber }));
+});
 program2.command("sync").description("Synchronize dependency states and parent rollups after issue or PR events").option("--issue <number>", "Issue number that changed", "0").option("--pr <number>", "PR number that closed/merged", "0").option("--pr-merged", "Whether the closed PR was merged", false).option("--repo <owner/repo>", "GitHub repository").action(async (opts) => {
   const github = createGitHubFromEnv(opts.repo);
   const issueNumber = Number(opts.issue);
@@ -24171,6 +24271,32 @@ program2.command("reconcile").description("Reconcile blocked_dep issues, contain
         })
       );
       availableSlots--;
+      dispatched++;
+    }
+    const managedPrs = await runOrExit(github.listOpenAiManagedPrs());
+    for (const pr of managedPrs) {
+      if (pr.latestReviewState !== "CHANGES_REQUESTED") continue;
+      const linkedIssue = byNumber.get(pr.issueNumber);
+      if (!linkedIssue || linkedIssue.state !== "open" || linkedIssue.status !== "review_pending") {
+        continue;
+      }
+      const ageMs = now - Date.parse(pr.updatedAt);
+      if (!Number.isNaN(ageMs) && ageMs < cooldownMs) continue;
+      const comments = await runOrExit(github.listIssueComments(pr.issueNumber));
+      let retryCount = 0;
+      for (const body of comments) {
+        const matches2 = body.matchAll(/<!--\s*pr-flow:retries=(\d+)\s*-->/g);
+        for (const m of matches2) {
+          const n2 = Number(m[1]);
+          if (!Number.isNaN(n2) && n2 > retryCount) retryCount = n2;
+        }
+      }
+      if (retryCount >= config.agent.maxRetries) continue;
+      await runOrExit(
+        github.dispatchWorkflow("pr-flow-review.yml", config.baseBranch, {
+          pr_number: String(pr.number)
+        })
+      );
       dispatched++;
     }
   }

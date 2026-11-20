@@ -32,6 +32,19 @@ export function isTransientAgentError(output: string, timedOut: boolean): boolea
   return TRANSIENT_ERROR_PATTERNS.some((pattern) => pattern.test(output));
 }
 
+const MODEL_UNAVAILABLE_PATTERNS: readonly RegExp[] = [
+  /ModelNotFoundError/,
+  /is no longer available/i,
+  /\b404\b/,
+];
+
+export function isModelFallbackError(output: string, timedOut: boolean): boolean {
+  return (
+    isTransientAgentError(output, timedOut) ||
+    MODEL_UNAVAILABLE_PATTERNS.some((pattern) => pattern.test(output))
+  );
+}
+
 function runShell(
   command: string,
   cwd: string,
@@ -109,12 +122,16 @@ export function runAgentExecution(params: {
   const nodeOpts = [process.env.NODE_OPTIONS, '--dns-result-order=ipv4first']
     .filter(Boolean)
     .join(' ');
-  const timeoutMs = config.agent.timeoutMinutes * 60_000;
 
   const modelsToTry =
     config.agent.provider === 'gemini'
       ? Array.from(new Set([config.agent.model, ...config.agent.fallbackModels]))
       : ['custom'];
+
+  const perModelTimeoutMs = Math.max(
+    5 * 60_000,
+    Math.floor((config.agent.timeoutMinutes * 60_000) / modelsToTry.length),
+  );
 
   let parsedResult: AgentResult | null = null;
   let lastRun: { ok: boolean; status: number; output: string; timedOut: boolean } | null = null;
@@ -122,7 +139,7 @@ export function runAgentExecution(params: {
   for (let idx = 0; idx < modelsToTry.length; idx++) {
     const modelName = modelsToTry[idx]!;
     if (idx > 0) {
-      console.error(`[pr-flow] Falling back to model "${modelName}" after transient failure...`);
+      console.error(`[pr-flow] Falling back to model "${modelName}" after error...`);
       resetWorkingTree(cwd, outputDir);
       if (fs.existsSync(resultPath)) fs.unlinkSync(resultPath);
     }
@@ -141,7 +158,7 @@ export function runAgentExecution(params: {
         GEMINI_CLI_TRUST_WORKSPACE: 'true',
         NODE_OPTIONS: nodeOpts,
       },
-      timeoutMs,
+      perModelTimeoutMs,
     );
 
     lastRun = agentRun;
@@ -157,8 +174,7 @@ export function runAgentExecution(params: {
       );
     }
 
-    const transient = isTransientAgentError(agentRun.output, agentRun.timedOut);
-    if (!transient) {
+    if (!isModelFallbackError(agentRun.output, agentRun.timedOut)) {
       break;
     }
   }

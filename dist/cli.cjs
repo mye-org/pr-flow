@@ -19425,6 +19425,19 @@ var OctokitGitHubAdapter = class {
       (err) => toGitHubError(`Failed to create PR for branch ${input.head}`, err)
     );
   }
+  mergePullRequest(prNumber, method) {
+    return tryCatch(
+      async () => {
+        await this.octokit.rest.pulls.merge({
+          owner: this.owner,
+          repo: this.repo,
+          pull_number: prNumber,
+          merge_method: method
+        });
+      },
+      (err) => toGitHubError(`Failed to merge PR #${prNumber}`, err)
+    );
+  }
   addPrComment(prNumber, body) {
     return this.addComment(prNumber, body);
   }
@@ -19491,7 +19504,9 @@ var PrFlowConfigSchema = external_exports.object({
   }).default({}),
   triggers: external_exports.object({
     reviewMode: external_exports.enum(["changes_requested", "comment", "both"]).default("changes_requested"),
-    autoPickup: external_exports.boolean().default(true)
+    autoPickup: external_exports.boolean().default(true),
+    autoMergeOnApprove: external_exports.boolean().default(true),
+    mergeMethod: external_exports.enum(["squash", "merge", "rebase"]).default("squash")
   }).default({})
 });
 function parseConfig(yamlContent) {
@@ -23632,6 +23647,8 @@ agent:
 triggers:
   reviewMode: ${opts.reviewMode}
   autoPickup: true
+  autoMergeOnApprove: true
+  mergeMethod: squash
 `;
   const agentsMdContent = `# AGENTS.md
 
@@ -23710,6 +23727,15 @@ jobs:
       pr_number: \${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.pr_number) || github.event.pull_request.number }}
     secrets:
       GEMINI_API_KEY: \${{ secrets.GEMINI_API_KEY }}
+
+  merge:
+    if: >-
+      github.event_name == 'pull_request_review' &&
+      github.event.review.state == 'approved' &&
+      contains(github.event.pull_request.labels.*.name, 'ai-managed')
+    uses: ${usesPrefix}/reusable-merge.yml@${opts.prFlowRef}
+    with:
+      pr_number: \${{ github.event.pull_request.number }}
 `;
   const syncWorkflow = `name: pr-flow Sync
 
@@ -24140,6 +24166,26 @@ ${agentResult.summary}
       status: transition.nextStatus
     })
   );
+});
+program2.command("merge").description("Merge an approved ai-managed pull request and transition its linked issue to status:fixed").requiredOption("--pr <number>", "Pull request number").option("--issue <number>", "Linked issue number (optional)", "0").option("--config <path>", "Path to pr-flow.config.yml", "pr-flow.config.yml").option("--repo <owner/repo>", "GitHub repository").action(async (opts) => {
+  const prNumber = Number(opts.pr);
+  const issueNumber = Number(opts.issue);
+  const configPath = path3.resolve(opts.config);
+  const config = fs3.existsSync(configPath) ? loadConfigFromDisk(opts.config) : null;
+  const autoMerge = config ? config.triggers.autoMergeOnApprove : true;
+  const mergeMethod = config ? config.triggers.mergeMethod : "squash";
+  if (!autoMerge) {
+    console.log(JSON.stringify({ merged: false, reason: "triggers.autoMergeOnApprove is false" }));
+    return;
+  }
+  const github = createGitHubFromEnv(opts.repo);
+  await runOrExit(github.mergePullRequest(prNumber, mergeMethod));
+  if (issueNumber > 0) {
+    const issue = await runOrExit(github.getIssue(issueNumber));
+    const tr = transitionIssue(issue, { type: "PR_MERGED", prNumber });
+    await runOrExit(executeEffects(tr.effects, github));
+  }
+  console.log(JSON.stringify({ merged: true, prNumber, mergeMethod, issueNumber }));
 });
 program2.command("sync").description("Synchronize dependency states and parent rollups after issue or PR events").option("--issue <number>", "Issue number that changed", "0").option("--pr <number>", "PR number that closed/merged", "0").option("--pr-merged", "Whether the closed PR was merged", false).option("--repo <owner/repo>", "GitHub repository").action(async (opts) => {
   const github = createGitHubFromEnv(opts.repo);

@@ -18,3 +18,5 @@ agent:
 triggers:
   reviewMode: changes_requested
   autoPickup: true
+  autoMergeOnApprove: true
+  mergeMethod: squash

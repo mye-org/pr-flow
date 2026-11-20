@@ -512,6 +512,23 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
+  mergePullRequest(
+    prNumber: number,
+    method: 'squash' | 'merge' | 'rebase',
+  ): TE.TaskEither<DomainError, void> {
+    return TE.tryCatch(
+      async () => {
+        await this.octokit.rest.pulls.merge({
+          owner: this.owner,
+          repo: this.repo,
+          pull_number: prNumber,
+          merge_method: method,
+        });
+      },
+      (err) => toGitHubError(`Failed to merge PR #${prNumber}`, err),
+    );
+  }
+
   addPrComment(prNumber: number, body: string): TE.TaskEither<DomainError, void> {
     return this.addComment(prNumber, body);
   }

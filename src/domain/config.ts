@@ -25,6 +25,8 @@ export const PrFlowConfigSchema = z.object({
     .object({
       reviewMode: z.enum(['changes_requested', 'comment', 'both']).default('changes_requested'),
       autoPickup: z.boolean().default(true),
+      autoMergeOnApprove: z.boolean().default(true),
+      mergeMethod: z.enum(['squash', 'merge', 'rebase']).default('squash'),
     })
     .default({}),
 });

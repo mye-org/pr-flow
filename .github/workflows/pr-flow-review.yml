@@ -30,3 +30,12 @@ jobs:
       pr_number: ${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.pr_number) || github.event.pull_request.number }}
     secrets:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+  merge:
+    if: >-
+      github.event_name == 'pull_request_review' &&
+      github.event.review.state == 'approved' &&
+      contains(github.event.pull_request.labels.*.name, 'ai-managed')
+    uses: mingqianye/pr-flow/.github/workflows/reusable-merge.yml@v1
+    with:
+      pr_number: ${{ github.event.pull_request.number }}

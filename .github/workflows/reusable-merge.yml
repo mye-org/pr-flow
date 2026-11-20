@@ -1,0 +1,42 @@
+name: Reusable Merge on Approve
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        required: true
+        type: number
+      pr_flow_ref:
+        required: false
+        type: string
+        default: v1
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: mingqianye/pr-flow
+          ref: ${{ inputs.pr_flow_ref }}
+          path: _pr_flow
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Resolve linked issue and merge approved PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          HEAD_REF=$(gh pr view "${{ inputs.pr_number }}" --repo "${{ github.repository }}" --json headRefName -q '.headRefName')
+          ISSUE_NUM=$(echo "$HEAD_REF" | sed -n 's/^ai\/issue-\([0-9]\+\)$/\1/p')
+          ISSUE_ARG=""
+          if [ -n "$ISSUE_NUM" ]; then
+            ISSUE_ARG="--issue $ISSUE_NUM"
+          fi
+          node _pr_flow/dist/cli.cjs merge --pr "${{ inputs.pr_number }}" $ISSUE_ARG

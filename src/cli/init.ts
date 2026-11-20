@@ -52,6 +52,8 @@ agent:
 triggers:
   reviewMode: ${opts.reviewMode}
   autoPickup: true
+  autoMergeOnApprove: true
+  mergeMethod: squash
 `;
 
   const agentsMdContent = `# AGENTS.md
@@ -133,6 +135,15 @@ jobs:
       pr_number: \${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.pr_number) || github.event.pull_request.number }}
     secrets:
       GEMINI_API_KEY: \${{ secrets.GEMINI_API_KEY }}
+
+  merge:
+    if: >-
+      github.event_name == 'pull_request_review' &&
+      github.event.review.state == 'approved' &&
+      contains(github.event.pull_request.labels.*.name, 'ai-managed')
+    uses: ${usesPrefix}/reusable-merge.yml@${opts.prFlowRef}
+    with:
+      pr_number: \${{ github.event.pull_request.number }}
 `;
 
   const syncWorkflow = `name: pr-flow Sync

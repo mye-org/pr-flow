@@ -15,6 +15,8 @@ export const PrFlowConfigSchema = z.object({
     .object({
       provider: z.enum(['gemini', 'custom']).default('gemini'),
       model: z.string().default('gemini-3.8-flash'),
+      fallbackModels: z.array(z.string().min(1)).default([]),
+      maxRetries: z.number().int().min(0).default(3),
       command: z.string().optional(),
       timeoutMinutes: z.number().int().min(1).default(20),
     })

@@ -28,6 +28,10 @@ export const issueMachine = setup({
         event.wipCount < event.wipLimit
       );
     },
+    canRetry: ({ event }) => {
+      if (event.type !== 'TRANSIENT_EXECUTION_FAILED') return false;
+      return event.retryCount < event.maxRetries;
+    },
   },
   actions: {
     emitLabelSwap: assign(({ context }, params: { from: IssueStatus; to: IssueStatus }) => ({
@@ -135,6 +139,35 @@ export const issueMachine = setup({
             })),
           ],
         },
+        TRANSIENT_EXECUTION_FAILED: [
+          {
+            guard: 'canRetry',
+            target: 'ready',
+            actions: [
+              { type: 'emitLabelSwap', params: { from: 'in_progress', to: 'ready' } },
+              assign(({ context, event }) => ({
+                effects: appendEffect(context.effects, {
+                  type: 'ADD_COMMENT',
+                  issueNumber: context.issueNumber,
+                  body: `<!-- pr-flow:retries=${event.retryCount + 1} -->\nTransient agent API error (attempt ${event.retryCount + 1}/${event.maxRetries}); re-queued to \`status:ready\` for automatic retry.\n\n**Reason:** ${event.reason}`,
+                }),
+              })),
+            ],
+          },
+          {
+            target: 'needs_human',
+            actions: [
+              { type: 'emitLabelSwap', params: { from: 'in_progress', to: 'needs_human' } },
+              assign(({ context, event }) => ({
+                effects: appendEffect(context.effects, {
+                  type: 'ADD_COMMENT',
+                  issueNumber: context.issueNumber,
+                  body: `Automated execution failed after ${event.maxRetries} transient retries and requires human intervention.\n\n**Reason:** ${event.reason}`,
+                }),
+              })),
+            ],
+          },
+        ],
         NEEDS_HUMAN_DETECTED: {
           target: 'needs_human',
           actions: [
@@ -163,6 +196,32 @@ export const issueMachine = setup({
             { type: 'emitCloseIssue' },
           ],
         },
+        TRANSIENT_EXECUTION_FAILED: [
+          {
+            guard: 'canRetry',
+            target: 'review_pending',
+            actions: assign(({ context, event }) => ({
+              effects: appendEffect(context.effects, {
+                type: 'ADD_COMMENT',
+                issueNumber: context.issueNumber,
+                body: `<!-- pr-flow:retries=${event.retryCount + 1} -->\nTransient agent API error during review follow-up (attempt ${event.retryCount + 1}/${event.maxRetries}); keeping in \`status:review-pending\`.\n\n**Reason:** ${event.reason}`,
+              }),
+            })),
+          },
+          {
+            target: 'needs_human',
+            actions: [
+              { type: 'emitLabelSwap', params: { from: 'review_pending', to: 'needs_human' } },
+              assign(({ context, event }) => ({
+                effects: appendEffect(context.effects, {
+                  type: 'ADD_COMMENT',
+                  issueNumber: context.issueNumber,
+                  body: `Review follow-up failed after ${event.maxRetries} transient retries.\n\n**Reason:** ${event.reason}`,
+                }),
+              })),
+            ],
+          },
+        ],
         EXECUTION_FAILED: {
           target: 'needs_human',
           actions: [

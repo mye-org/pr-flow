@@ -292,13 +292,18 @@ program
     });
 
     if (E.isLeft(runResult)) {
+      const isRetryable =
+        runResult.left.type === 'AGENT_EXECUTION_ERROR' && runResult.left.retryable === true;
+      const resultStatus = isRetryable ? 'retryable' : 'failed';
       fs.mkdirSync(outputDir, { recursive: true });
       fs.writeFileSync(
         resultFilePath,
         JSON.stringify(
           {
-            status: 'failed',
-            summary: 'Agent execution errored before verification.',
+            status: resultStatus,
+            summary: isRetryable
+              ? 'Agent execution hit a transient API/network error.'
+              : 'Agent execution errored before verification.',
             reason: formatDomainError(runResult.left),
             testsRun: false,
           },
@@ -307,7 +312,7 @@ program
         ),
       );
       fs.writeFileSync(path.join(outputDir, 'changes.patch'), '', 'utf-8');
-      console.log(JSON.stringify({ status: 'failed', reason: formatDomainError(runResult.left) }));
+      console.log(JSON.stringify({ status: resultStatus, reason: formatDomainError(runResult.left) }));
       return;
     }
 
@@ -348,6 +353,34 @@ program
     const branch = branchNameForIssue(issueNumber);
 
     if (agentResult.status !== 'success') {
+      if (agentResult.status === 'retryable') {
+        const comments = await runOrExit(github.listIssueComments(issueNumber));
+        let retryCount = 0;
+        for (const body of comments) {
+          const matches = body.matchAll(/<!--\s*pr-flow:retries=(\d+)\s*-->/g);
+          for (const m of matches) {
+            const n = Number(m[1]);
+            if (!Number.isNaN(n) && n > retryCount) retryCount = n;
+          }
+        }
+        const transition = transitionIssue(issue, {
+          type: 'TRANSIENT_EXECUTION_FAILED',
+          reason: agentResult.reason ?? agentResult.summary,
+          retryCount,
+          maxRetries: config.agent.maxRetries,
+        });
+        await runOrExit(executeEffects(transition.effects, github));
+        console.log(
+          JSON.stringify({
+            finalized: true,
+            status: transition.nextStatus,
+            retryCount: retryCount + 1,
+            maxRetries: config.agent.maxRetries,
+          }),
+        );
+        return;
+      }
+
       const event =
         agentResult.status === 'needs_human'
           ? ({ type: 'NEEDS_HUMAN_DETECTED', reason: agentResult.reason ?? agentResult.summary } as const)
@@ -496,15 +529,20 @@ program
 
 program
   .command('reconcile')
-  .description('Reconcile blocked_dep issues and container rollups across the repository')
+  .description('Reconcile blocked_dep issues, container rollups, and dispatch ready issues')
+  .option('--config <path>', 'Path to pr-flow.config.yml', 'pr-flow.config.yml')
+  .option('--cooldown-minutes <n>', 'Minimum minutes since last update before auto-dispatching ready issues', '10')
   .option('--repo <owner/repo>', 'GitHub repository')
   .action(async (opts) => {
     const github = createGitHubFromEnv(opts.repo);
+    const configPath = path.resolve(opts.config);
+    const config = fs.existsSync(configPath) ? loadConfigFromDisk(opts.config) : null;
     const allIssues = await runOrExit(github.listAllIssues('all'));
     const byNumber = new Map<number, IssueNode>(allIssues.map((i) => [i.number, i]));
 
     let unblocked = 0;
     let rolledUp = 0;
+    let dispatched = 0;
 
     for (const issue of allIssues) {
       if (issue.state === 'open' && issue.status === 'blocked_dep') {
@@ -512,6 +550,7 @@ program
         if (blockers.every((b) => b.state === 'closed')) {
           const tr = transitionIssue(issue, { type: 'DEPS_RESOLVED' });
           await runOrExit(executeEffects(tr.effects, github));
+          issue.status = 'ready';
           unblocked++;
         }
       }
@@ -533,7 +572,36 @@ program
       }
     }
 
-    console.log(JSON.stringify({ reconciled: true, unblocked, rolledUp }));
+    if (config && config.triggers.autoPickup) {
+      const wipCount = allIssues.filter((i) => i.state === 'open' && i.status === 'in_progress').length;
+      let availableSlots = Math.max(0, config.wipLimit - wipCount);
+      const cooldownMs = Number(opts.cooldownMinutes) * 60_000;
+      const now = Date.now();
+
+      for (const issue of allIssues) {
+        if (availableSlots <= 0) break;
+        if (issue.state !== 'open' || issue.status !== 'ready') continue;
+        if (!isExecutableLeaf(issue)) continue;
+        const ageMs = now - Date.parse(issue.updatedAt);
+        if (!Number.isNaN(ageMs) && ageMs < cooldownMs) continue;
+
+        const blockers = await runOrExit(github.listBlockedBy(issue.number));
+        if (!blockers.every((b) => b.state === 'closed')) continue;
+
+        const openPrs = await runOrExit(github.listOpenPrsForIssue(issue.number));
+        if (openPrs.length > 0) continue;
+
+        await runOrExit(
+          github.dispatchWorkflow('pr-flow-implement.yml', config.baseBranch, {
+            issue_number: String(issue.number),
+          }),
+        );
+        availableSlots--;
+        dispatched++;
+      }
+    }
+
+    console.log(JSON.stringify({ reconciled: true, unblocked, rolledUp, dispatched }));
   });
 
 program.parseAsync(process.argv).catch((err) => {

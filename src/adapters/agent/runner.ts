@@ -13,19 +13,72 @@ export interface AgentRunOutput {
   hasChanges: boolean;
 }
 
-function runShell(command: string, cwd: string, env?: NodeJS.ProcessEnv): { ok: boolean; status: number; output: string } {
+const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
+  /\b503\b/,
+  /\b429\b/,
+  /Service Unavailable/i,
+  /UNAVAILABLE/,
+  /RESOURCE_EXHAUSTED/,
+  /Too Many Requests/i,
+  /high demand/i,
+  /fetch failed/i,
+  /ECONNRESET/,
+  /ETIMEDOUT/,
+  /EAI_AGAIN/,
+];
+
+export function isTransientAgentError(output: string, timedOut: boolean): boolean {
+  if (timedOut) return true;
+  return TRANSIENT_ERROR_PATTERNS.some((pattern) => pattern.test(output));
+}
+
+function runShell(
+  command: string,
+  cwd: string,
+  env?: NodeJS.ProcessEnv,
+  timeoutMs?: number,
+): { ok: boolean; status: number; output: string; timedOut: boolean } {
   const res = spawnSync('bash', ['-lc', command], {
     cwd,
     env: { ...process.env, ...env },
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: timeoutMs,
+    killSignal: 'SIGTERM',
   });
+  const timedOut = res.error !== undefined && (res.error as NodeJS.ErrnoException).code === 'ETIMEDOUT';
   const output = `${res.stdout ?? ''}\n${res.stderr ?? ''}`.trim();
   return {
-    ok: res.status === 0,
+    ok: res.status === 0 && !timedOut,
     status: res.status ?? 1,
-    output,
+    output: timedOut ? `${output}\n[pr-flow] Command timed out after ${timeoutMs}ms`.trim() : output,
+    timedOut,
   };
+}
+
+function resetWorkingTree(cwd: string, outputDir: string): void {
+  try {
+    execSync('git checkout -- .', { cwd, stdio: 'pipe' });
+    const relOut = path.relative(cwd, outputDir);
+    const excludeArg =
+      relOut && !relOut.startsWith('..') && !path.isAbsolute(relOut)
+        ? `-e ${JSON.stringify(relOut)}`
+        : '';
+    execSync(`git clean -fd ${excludeArg}`, { cwd, stdio: 'pipe' });
+  } catch {
+    // Best-effort cleanup between model fallback attempts
+  }
+}
+
+function tryReadResult(resultPath: string): AgentResult | null {
+  if (!fs.existsSync(resultPath)) return null;
+  try {
+    const rawJson = JSON.parse(fs.readFileSync(resultPath, 'utf-8'));
+    const validated = AgentResultSchema.safeParse(rawJson);
+    return validated.success ? validated.data : null;
+  } catch {
+    return null;
+  }
 }
 
 export function runAgentExecution(params: {
@@ -53,47 +106,70 @@ export function runAgentExecution(params: {
     }
   }
 
-  let agentCommand: string;
-  if (config.agent.provider === 'gemini') {
-    const escapedPromptPath = JSON.stringify(promptPath);
-    agentCommand = `npx --yes @google/gemini-cli --model ${config.agent.model} --yolo -p "$(cat ${escapedPromptPath})"`;
-  } else {
-    agentCommand = config.agent.command!;
-  }
-
   const nodeOpts = [process.env.NODE_OPTIONS, '--dns-result-order=ipv4first']
     .filter(Boolean)
     .join(' ');
+  const timeoutMs = config.agent.timeoutMinutes * 60_000;
 
-  const agentRun = runShell(agentCommand, cwd, {
-    PR_FLOW_PROMPT_FILE: promptPath,
-    PR_FLOW_RESULT_FILE: resultPath,
-    GEMINI_CLI_TRUST_WORKSPACE: 'true',
-    NODE_OPTIONS: nodeOpts,
-  });
+  const modelsToTry =
+    config.agent.provider === 'gemini'
+      ? Array.from(new Set([config.agent.model, ...config.agent.fallbackModels]))
+      : ['custom'];
 
-  // Always check if result.json was written
   let parsedResult: AgentResult | null = null;
-  if (fs.existsSync(resultPath)) {
-    try {
-      const rawJson = JSON.parse(fs.readFileSync(resultPath, 'utf-8'));
-      const validated = AgentResultSchema.safeParse(rawJson);
-      if (validated.success) {
-        parsedResult = validated.data;
-      }
-    } catch {
-      // Fall through to fallback handling
+  let lastRun: { ok: boolean; status: number; output: string; timedOut: boolean } | null = null;
+
+  for (let idx = 0; idx < modelsToTry.length; idx++) {
+    const modelName = modelsToTry[idx]!;
+    if (idx > 0) {
+      console.error(`[pr-flow] Falling back to model "${modelName}" after transient failure...`);
+      resetWorkingTree(cwd, outputDir);
+      if (fs.existsSync(resultPath)) fs.unlinkSync(resultPath);
+    }
+
+    const agentCommand =
+      config.agent.provider === 'gemini'
+        ? `npx --yes @google/gemini-cli --model ${modelName} --yolo -p "$(cat ${JSON.stringify(promptPath)})"`
+        : config.agent.command!;
+
+    const agentRun = runShell(
+      agentCommand,
+      cwd,
+      {
+        PR_FLOW_PROMPT_FILE: promptPath,
+        PR_FLOW_RESULT_FILE: resultPath,
+        GEMINI_CLI_TRUST_WORKSPACE: 'true',
+        NODE_OPTIONS: nodeOpts,
+      },
+      timeoutMs,
+    );
+
+    lastRun = agentRun;
+    parsedResult = tryReadResult(resultPath);
+
+    if (agentRun.ok || parsedResult) {
+      break;
+    }
+
+    if (agentRun.output.length > 0) {
+      console.error(
+        `--- Agent CLI Output (model=${modelName}) ---\n${agentRun.output}\n--- End Agent CLI Output ---`,
+      );
+    }
+
+    const transient = isTransientAgentError(agentRun.output, agentRun.timedOut);
+    if (!transient) {
+      break;
     }
   }
 
-  if (!agentRun.ok && !parsedResult) {
-    if (agentRun.output.length > 0) {
-      console.error('--- Agent CLI Output ---\n' + agentRun.output + '\n--- End Agent CLI Output ---');
-    }
+  if (lastRun && !lastRun.ok && !parsedResult) {
+    const retryable = isTransientAgentError(lastRun.output, lastRun.timedOut);
     return E.left({
       type: 'AGENT_EXECUTION_ERROR',
-      message: `Agent CLI exited with code ${agentRun.status}: ${agentRun.output.slice(-1500)}`,
-      exitCode: agentRun.status,
+      message: `Agent CLI exited with code ${lastRun.status}: ${lastRun.output.slice(-1500)}`,
+      exitCode: lastRun.status,
+      retryable,
     });
   }
 

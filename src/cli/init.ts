@@ -43,6 +43,10 @@ workspace:
 agent:
   provider: gemini
   model: gemini-3.8-flash
+  fallbackModels:
+    - gemini-3-flash-preview
+    - gemini-2.5-flash-lite
+  maxRetries: 3
   timeoutMinutes: 20
 
 triggers:
@@ -162,6 +166,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: write
   contents: read
   issues: write
   pull-requests: read

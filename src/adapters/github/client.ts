@@ -210,6 +210,10 @@ export class OctokitGitHubAdapter implements GitHubPort {
   }
 
   addComment(issueNumber: number, body: string): TE.TaskEither<DomainError, void> {
+    return this.addCommentImpl(issueNumber, body);
+  }
+
+  private addCommentImpl(issueNumber: number, body: string): TE.TaskEither<DomainError, void> {
     return TE.tryCatch(
       async () => {
         await this.octokit.rest.issues.createComment({
@@ -220,6 +224,40 @@ export class OctokitGitHubAdapter implements GitHubPort {
         });
       },
       (err) => toGitHubError(`Failed to comment on #${issueNumber}`, err),
+    );
+  }
+
+  listIssueComments(issueNumber: number): TE.TaskEither<DomainError, string[]> {
+    return TE.tryCatch(
+      async () => {
+        const comments = await this.octokit.paginate(this.octokit.rest.issues.listComments, {
+          owner: this.owner,
+          repo: this.repo,
+          issue_number: issueNumber,
+          per_page: 100,
+        });
+        return comments.map((c) => c.body ?? '');
+      },
+      (err) => toGitHubError(`Failed to list comments for #${issueNumber}`, err),
+    );
+  }
+
+  dispatchWorkflow(
+    workflowFile: string,
+    ref: string,
+    inputs: Record<string, string>,
+  ): TE.TaskEither<DomainError, void> {
+    return TE.tryCatch(
+      async () => {
+        await this.octokit.rest.actions.createWorkflowDispatch({
+          owner: this.owner,
+          repo: this.repo,
+          workflow_id: workflowFile,
+          ref,
+          inputs,
+        });
+      },
+      (err) => toGitHubError(`Failed to dispatch workflow ${workflowFile}`, err),
     );
   }
 

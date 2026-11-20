@@ -17,6 +17,8 @@ workspace:
       expect(res.right.wipLimit).toBe(4);
       expect(res.right.baseBranch).toBe('main');
       expect(res.right.agent.provider).toBe('gemini');
+      expect(res.right.agent.fallbackModels).toEqual([]);
+      expect(res.right.agent.maxRetries).toBe(3);
       expect(res.right.triggers.reviewMode).toBe('changes_requested');
     }
   });

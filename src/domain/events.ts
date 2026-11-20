@@ -13,6 +13,7 @@ export type IssueEvent =
     }
   | { type: 'EXECUTION_SUCCEEDED'; prNumber: number; branch: string; summary: string }
   | { type: 'EXECUTION_FAILED'; reason: string }
+  | { type: 'TRANSIENT_EXECUTION_FAILED'; reason: string; retryCount: number; maxRetries: number }
   | { type: 'NEEDS_HUMAN_DETECTED'; reason: string }
   | { type: 'REVIEW_CHANGES_REQUESTED'; prNumber: number; reviewer: string }
   | { type: 'REVIEW_FIX_SUCCEEDED'; prNumber: number; summary: string }

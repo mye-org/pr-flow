@@ -16,7 +16,7 @@ export type DomainError =
   | { type: 'CONFIG_ERROR'; message: string }
   | { type: 'PLAN_VALIDATION_ERROR'; message: string; details?: string[] }
   | { type: 'GITHUB_API_ERROR'; message: string; status?: number; cause?: unknown }
-  | { type: 'AGENT_EXECUTION_ERROR'; message: string; exitCode?: number }
+  | { type: 'AGENT_EXECUTION_ERROR'; message: string; exitCode?: number; retryable?: boolean }
   | { type: 'GUARD_ERROR'; guard: GuardError }
   | { type: 'GIT_ERROR'; message: string };
 

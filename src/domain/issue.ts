@@ -136,7 +136,7 @@ export function extractPriorityFromLabels(labels: readonly string[]): Priority {
 }
 
 export const AgentResultSchema = z.object({
-  status: z.enum(['success', 'needs_human', 'failed']),
+  status: z.enum(['success', 'needs_human', 'failed', 'retryable']),
   summary: z.string().min(1),
   reason: z.string().optional(),
   testsRun: z.boolean().optional(),

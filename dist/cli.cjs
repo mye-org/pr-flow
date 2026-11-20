@@ -15254,7 +15254,7 @@ function extractPriorityFromLabels(labels) {
   return "p2";
 }
 var AgentResultSchema = external_exports.object({
-  status: external_exports.enum(["success", "needs_human", "failed"]),
+  status: external_exports.enum(["success", "needs_human", "failed", "retryable"]),
   summary: external_exports.string().min(1),
   reason: external_exports.string().optional(),
   testsRun: external_exports.boolean().optional(),
@@ -15262,20 +15262,61 @@ var AgentResultSchema = external_exports.object({
 });
 
 // src/adapters/agent/runner.ts
-function runShell(command, cwd, env) {
+var TRANSIENT_ERROR_PATTERNS = [
+  /\b503\b/,
+  /\b429\b/,
+  /Service Unavailable/i,
+  /UNAVAILABLE/,
+  /RESOURCE_EXHAUSTED/,
+  /Too Many Requests/i,
+  /high demand/i,
+  /fetch failed/i,
+  /ECONNRESET/,
+  /ETIMEDOUT/,
+  /EAI_AGAIN/
+];
+function isTransientAgentError(output, timedOut) {
+  if (timedOut) return true;
+  return TRANSIENT_ERROR_PATTERNS.some((pattern) => pattern.test(output));
+}
+function runShell(command, cwd, env, timeoutMs) {
   const res = (0, import_node_child_process.spawnSync)("bash", ["-lc", command], {
     cwd,
     env: { ...process.env, ...env },
     encoding: "utf-8",
-    stdio: ["ignore", "pipe", "pipe"]
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: timeoutMs,
+    killSignal: "SIGTERM"
   });
+  const timedOut = res.error !== void 0 && res.error.code === "ETIMEDOUT";
   const output = `${res.stdout ?? ""}
 ${res.stderr ?? ""}`.trim();
   return {
-    ok: res.status === 0,
+    ok: res.status === 0 && !timedOut,
     status: res.status ?? 1,
-    output
+    output: timedOut ? `${output}
+[pr-flow] Command timed out after ${timeoutMs}ms`.trim() : output,
+    timedOut
   };
+}
+function resetWorkingTree(cwd, outputDir) {
+  try {
+    (0, import_node_child_process.execSync)("git checkout -- .", { cwd, stdio: "pipe" });
+    const relOut = path.relative(cwd, outputDir);
+    const excludeArg = relOut && !relOut.startsWith("..") && !path.isAbsolute(relOut) ? `-e ${JSON.stringify(relOut)}` : "";
+    (0, import_node_child_process.execSync)(`git clean -fd ${excludeArg}`, { cwd, stdio: "pipe" });
+  } catch {
+  }
+}
+function tryReadResult(resultPath) {
+  if (!fs.existsSync(resultPath)) return null;
+  try {
+    const rawJson = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+    const validated = AgentResultSchema.safeParse(rawJson);
+    return validated.success ? validated.data : null;
+  } catch {
+    return null;
+  }
 }
 function runAgentExecution(params) {
   const { config, prompt, cwd, outputDir } = params;
@@ -15294,39 +15335,54 @@ function runAgentExecution(params) {
       });
     }
   }
-  let agentCommand;
-  if (config.agent.provider === "gemini") {
-    const escapedPromptPath = JSON.stringify(promptPath);
-    agentCommand = `npx --yes @google/gemini-cli --model ${config.agent.model} --yolo -p "$(cat ${escapedPromptPath})"`;
-  } else {
-    agentCommand = config.agent.command;
-  }
   const nodeOpts = [process.env.NODE_OPTIONS, "--dns-result-order=ipv4first"].filter(Boolean).join(" ");
-  const agentRun = runShell(agentCommand, cwd, {
-    PR_FLOW_PROMPT_FILE: promptPath,
-    PR_FLOW_RESULT_FILE: resultPath,
-    GEMINI_CLI_TRUST_WORKSPACE: "true",
-    NODE_OPTIONS: nodeOpts
-  });
+  const timeoutMs = config.agent.timeoutMinutes * 6e4;
+  const modelsToTry = config.agent.provider === "gemini" ? Array.from(/* @__PURE__ */ new Set([config.agent.model, ...config.agent.fallbackModels])) : ["custom"];
   let parsedResult = null;
-  if (fs.existsSync(resultPath)) {
-    try {
-      const rawJson = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
-      const validated = AgentResultSchema.safeParse(rawJson);
-      if (validated.success) {
-        parsedResult = validated.data;
-      }
-    } catch {
+  let lastRun = null;
+  for (let idx = 0; idx < modelsToTry.length; idx++) {
+    const modelName = modelsToTry[idx];
+    if (idx > 0) {
+      console.error(`[pr-flow] Falling back to model "${modelName}" after transient failure...`);
+      resetWorkingTree(cwd, outputDir);
+      if (fs.existsSync(resultPath)) fs.unlinkSync(resultPath);
+    }
+    const agentCommand = config.agent.provider === "gemini" ? `npx --yes @google/gemini-cli --model ${modelName} --yolo -p "$(cat ${JSON.stringify(promptPath)})"` : config.agent.command;
+    const agentRun = runShell(
+      agentCommand,
+      cwd,
+      {
+        PR_FLOW_PROMPT_FILE: promptPath,
+        PR_FLOW_RESULT_FILE: resultPath,
+        GEMINI_CLI_TRUST_WORKSPACE: "true",
+        NODE_OPTIONS: nodeOpts
+      },
+      timeoutMs
+    );
+    lastRun = agentRun;
+    parsedResult = tryReadResult(resultPath);
+    if (agentRun.ok || parsedResult) {
+      break;
+    }
+    if (agentRun.output.length > 0) {
+      console.error(
+        `--- Agent CLI Output (model=${modelName}) ---
+${agentRun.output}
+--- End Agent CLI Output ---`
+      );
+    }
+    const transient = isTransientAgentError(agentRun.output, agentRun.timedOut);
+    if (!transient) {
+      break;
     }
   }
-  if (!agentRun.ok && !parsedResult) {
-    if (agentRun.output.length > 0) {
-      console.error("--- Agent CLI Output ---\n" + agentRun.output + "\n--- End Agent CLI Output ---");
-    }
+  if (lastRun && !lastRun.ok && !parsedResult) {
+    const retryable = isTransientAgentError(lastRun.output, lastRun.timedOut);
     return left2({
       type: "AGENT_EXECUTION_ERROR",
-      message: `Agent CLI exited with code ${agentRun.status}: ${agentRun.output.slice(-1500)}`,
-      exitCode: agentRun.status
+      message: `Agent CLI exited with code ${lastRun.status}: ${lastRun.output.slice(-1500)}`,
+      exitCode: lastRun.status,
+      retryable
     });
   }
   const verify = runShell(config.workspace.verifyCommand, cwd);
@@ -19078,6 +19134,9 @@ var OctokitGitHubAdapter = class {
     );
   }
   addComment(issueNumber, body) {
+    return this.addCommentImpl(issueNumber, body);
+  }
+  addCommentImpl(issueNumber, body) {
     return tryCatch(
       async () => {
         await this.octokit.rest.issues.createComment({
@@ -19088,6 +19147,34 @@ var OctokitGitHubAdapter = class {
         });
       },
       (err) => toGitHubError(`Failed to comment on #${issueNumber}`, err)
+    );
+  }
+  listIssueComments(issueNumber) {
+    return tryCatch(
+      async () => {
+        const comments = await this.octokit.paginate(this.octokit.rest.issues.listComments, {
+          owner: this.owner,
+          repo: this.repo,
+          issue_number: issueNumber,
+          per_page: 100
+        });
+        return comments.map((c2) => c2.body ?? "");
+      },
+      (err) => toGitHubError(`Failed to list comments for #${issueNumber}`, err)
+    );
+  }
+  dispatchWorkflow(workflowFile, ref, inputs) {
+    return tryCatch(
+      async () => {
+        await this.octokit.rest.actions.createWorkflowDispatch({
+          owner: this.owner,
+          repo: this.repo,
+          workflow_id: workflowFile,
+          ref,
+          inputs
+        });
+      },
+      (err) => toGitHubError(`Failed to dispatch workflow ${workflowFile}`, err)
     );
   }
   ensureLabels(labels) {
@@ -19350,6 +19437,8 @@ var PrFlowConfigSchema = external_exports.object({
   agent: external_exports.object({
     provider: external_exports.enum(["gemini", "custom"]).default("gemini"),
     model: external_exports.string().default("gemini-3.8-flash"),
+    fallbackModels: external_exports.array(external_exports.string().min(1)).default([]),
+    maxRetries: external_exports.number().int().min(0).default(3),
     command: external_exports.string().optional(),
     timeoutMinutes: external_exports.number().int().min(1).default(20)
   }).default({}),
@@ -22928,6 +23017,10 @@ var issueMachine = setup({
     canPickup: ({ event }) => {
       if (event.type !== "PICKUP_REQUESTED") return false;
       return event.isLeaf && event.allBlockersClosed && event.openPrCount === 0 && event.wipCount < event.wipLimit;
+    },
+    canRetry: ({ event }) => {
+      if (event.type !== "TRANSIENT_EXECUTION_FAILED") return false;
+      return event.retryCount < event.maxRetries;
     }
   },
   actions: {
@@ -23040,6 +23133,40 @@ var issueMachine = setup({
             }))
           ]
         },
+        TRANSIENT_EXECUTION_FAILED: [
+          {
+            guard: "canRetry",
+            target: "ready",
+            actions: [
+              { type: "emitLabelSwap", params: { from: "in_progress", to: "ready" } },
+              assign(({ context, event }) => ({
+                effects: appendEffect(context.effects, {
+                  type: "ADD_COMMENT",
+                  issueNumber: context.issueNumber,
+                  body: `<!-- pr-flow:retries=${event.retryCount + 1} -->
+Transient agent API error (attempt ${event.retryCount + 1}/${event.maxRetries}); re-queued to \`status:ready\` for automatic retry.
+
+**Reason:** ${event.reason}`
+                })
+              }))
+            ]
+          },
+          {
+            target: "needs_human",
+            actions: [
+              { type: "emitLabelSwap", params: { from: "in_progress", to: "needs_human" } },
+              assign(({ context, event }) => ({
+                effects: appendEffect(context.effects, {
+                  type: "ADD_COMMENT",
+                  issueNumber: context.issueNumber,
+                  body: `Automated execution failed after ${event.maxRetries} transient retries and requires human intervention.
+
+**Reason:** ${event.reason}`
+                })
+              }))
+            ]
+          }
+        ],
         NEEDS_HUMAN_DETECTED: {
           target: "needs_human",
           actions: [
@@ -23070,6 +23197,37 @@ var issueMachine = setup({
             { type: "emitCloseIssue" }
           ]
         },
+        TRANSIENT_EXECUTION_FAILED: [
+          {
+            guard: "canRetry",
+            target: "review_pending",
+            actions: assign(({ context, event }) => ({
+              effects: appendEffect(context.effects, {
+                type: "ADD_COMMENT",
+                issueNumber: context.issueNumber,
+                body: `<!-- pr-flow:retries=${event.retryCount + 1} -->
+Transient agent API error during review follow-up (attempt ${event.retryCount + 1}/${event.maxRetries}); keeping in \`status:review-pending\`.
+
+**Reason:** ${event.reason}`
+              })
+            }))
+          },
+          {
+            target: "needs_human",
+            actions: [
+              { type: "emitLabelSwap", params: { from: "review_pending", to: "needs_human" } },
+              assign(({ context, event }) => ({
+                effects: appendEffect(context.effects, {
+                  type: "ADD_COMMENT",
+                  issueNumber: context.issueNumber,
+                  body: `Review follow-up failed after ${event.maxRetries} transient retries.
+
+**Reason:** ${event.reason}`
+                })
+              }))
+            ]
+          }
+        ],
         EXECUTION_FAILED: {
           target: "needs_human",
           actions: [
@@ -23418,6 +23576,10 @@ workspace:
 agent:
   provider: gemini
   model: gemini-3.8-flash
+  fallbackModels:
+    - gemini-3-flash-preview
+    - gemini-2.5-flash-lite
+  maxRetries: 3
   timeoutMinutes: 20
 
 triggers:
@@ -23532,6 +23694,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: write
   contents: read
   issues: write
   pull-requests: read
@@ -23759,13 +23922,15 @@ program2.command("execute").description("Run AI coding agent + verifyCommand wit
     outputDir
   });
   if (isLeft2(runResult)) {
+    const isRetryable = runResult.left.type === "AGENT_EXECUTION_ERROR" && runResult.left.retryable === true;
+    const resultStatus = isRetryable ? "retryable" : "failed";
     fs3.mkdirSync(outputDir, { recursive: true });
     fs3.writeFileSync(
       resultFilePath,
       JSON.stringify(
         {
-          status: "failed",
-          summary: "Agent execution errored before verification.",
+          status: resultStatus,
+          summary: isRetryable ? "Agent execution hit a transient API/network error." : "Agent execution errored before verification.",
           reason: formatDomainError(runResult.left),
           testsRun: false
         },
@@ -23774,7 +23939,7 @@ program2.command("execute").description("Run AI coding agent + verifyCommand wit
       )
     );
     fs3.writeFileSync(path3.join(outputDir, "changes.patch"), "", "utf-8");
-    console.log(JSON.stringify({ status: "failed", reason: formatDomainError(runResult.left) }));
+    console.log(JSON.stringify({ status: resultStatus, reason: formatDomainError(runResult.left) }));
     return;
   }
   console.log(
@@ -23801,6 +23966,33 @@ program2.command("finalize").description("Apply changes.patch, push ai/issue-<N>
   const issue = await runOrExit(github.getIssue(issueNumber));
   const branch = branchNameForIssue(issueNumber);
   if (agentResult.status !== "success") {
+    if (agentResult.status === "retryable") {
+      const comments = await runOrExit(github.listIssueComments(issueNumber));
+      let retryCount = 0;
+      for (const body of comments) {
+        const matches2 = body.matchAll(/<!--\s*pr-flow:retries=(\d+)\s*-->/g);
+        for (const m of matches2) {
+          const n2 = Number(m[1]);
+          if (!Number.isNaN(n2) && n2 > retryCount) retryCount = n2;
+        }
+      }
+      const transition3 = transitionIssue(issue, {
+        type: "TRANSIENT_EXECUTION_FAILED",
+        reason: agentResult.reason ?? agentResult.summary,
+        retryCount,
+        maxRetries: config.agent.maxRetries
+      });
+      await runOrExit(executeEffects(transition3.effects, github));
+      console.log(
+        JSON.stringify({
+          finalized: true,
+          status: transition3.nextStatus,
+          retryCount: retryCount + 1,
+          maxRetries: config.agent.maxRetries
+        })
+      );
+      return;
+    }
     const event = agentResult.status === "needs_human" ? { type: "NEEDS_HUMAN_DETECTED", reason: agentResult.reason ?? agentResult.summary } : { type: "EXECUTION_FAILED", reason: agentResult.reason ?? agentResult.summary };
     const transition2 = transitionIssue(issue, event);
     await runOrExit(executeEffects(transition2.effects, github));
@@ -23925,18 +24117,22 @@ program2.command("sync").description("Synchronize dependency states and parent r
   }
   console.log(JSON.stringify({ synced: true, issueNumber, prNumber: Number(opts.pr), prMerged: Boolean(opts.prMerged) }));
 });
-program2.command("reconcile").description("Reconcile blocked_dep issues and container rollups across the repository").option("--repo <owner/repo>", "GitHub repository").action(async (opts) => {
+program2.command("reconcile").description("Reconcile blocked_dep issues, container rollups, and dispatch ready issues").option("--config <path>", "Path to pr-flow.config.yml", "pr-flow.config.yml").option("--cooldown-minutes <n>", "Minimum minutes since last update before auto-dispatching ready issues", "10").option("--repo <owner/repo>", "GitHub repository").action(async (opts) => {
   const github = createGitHubFromEnv(opts.repo);
+  const configPath = path3.resolve(opts.config);
+  const config = fs3.existsSync(configPath) ? loadConfigFromDisk(opts.config) : null;
   const allIssues = await runOrExit(github.listAllIssues("all"));
   const byNumber = new Map(allIssues.map((i2) => [i2.number, i2]));
   let unblocked = 0;
   let rolledUp = 0;
+  let dispatched = 0;
   for (const issue of allIssues) {
     if (issue.state === "open" && issue.status === "blocked_dep") {
       const blockers = await runOrExit(github.listBlockedBy(issue.number));
       if (blockers.every((b2) => b2.state === "closed")) {
         const tr = transitionIssue(issue, { type: "DEPS_RESOLVED" });
         await runOrExit(executeEffects(tr.effects, github));
+        issue.status = "ready";
         unblocked++;
       }
     }
@@ -23954,7 +24150,31 @@ program2.command("reconcile").description("Reconcile blocked_dep issues and cont
       }
     }
   }
-  console.log(JSON.stringify({ reconciled: true, unblocked, rolledUp }));
+  if (config && config.triggers.autoPickup) {
+    const wipCount = allIssues.filter((i2) => i2.state === "open" && i2.status === "in_progress").length;
+    let availableSlots = Math.max(0, config.wipLimit - wipCount);
+    const cooldownMs = Number(opts.cooldownMinutes) * 6e4;
+    const now = Date.now();
+    for (const issue of allIssues) {
+      if (availableSlots <= 0) break;
+      if (issue.state !== "open" || issue.status !== "ready") continue;
+      if (!isExecutableLeaf(issue)) continue;
+      const ageMs = now - Date.parse(issue.updatedAt);
+      if (!Number.isNaN(ageMs) && ageMs < cooldownMs) continue;
+      const blockers = await runOrExit(github.listBlockedBy(issue.number));
+      if (!blockers.every((b2) => b2.state === "closed")) continue;
+      const openPrs = await runOrExit(github.listOpenPrsForIssue(issue.number));
+      if (openPrs.length > 0) continue;
+      await runOrExit(
+        github.dispatchWorkflow("pr-flow-implement.yml", config.baseBranch, {
+          issue_number: String(issue.number)
+        })
+      );
+      availableSlots--;
+      dispatched++;
+    }
+  }
+  console.log(JSON.stringify({ reconciled: true, unblocked, rolledUp, dispatched }));
 });
 program2.parseAsync(process.argv).catch((err) => {
   console.error(err);

@@ -165,4 +165,38 @@ describe('issueMachine transitions', () => {
     });
     expect(res.nextStatus).toBe('ready');
   });
+
+  it('re-queues in_progress -> ready on TRANSIENT_EXECUTION_FAILED when under maxRetries', () => {
+    const res = transitionIssue(makeIssue({ status: 'in_progress' }), {
+      type: 'TRANSIENT_EXECUTION_FAILED',
+      reason: '503 Service Unavailable',
+      retryCount: 1,
+      maxRetries: 3,
+    });
+    expect(res.nextStatus).toBe('ready');
+    expect(res.effects).toEqual([
+      { type: 'SWAP_STATUS_LABEL', issueNumber: 42, from: 'in_progress', to: 'ready' },
+      expect.objectContaining({
+        type: 'ADD_COMMENT',
+        issueNumber: 42,
+        body: expect.stringContaining('<!-- pr-flow:retries=2 -->'),
+      }),
+    ]);
+  });
+
+  it('escalates in_progress -> needs_human on TRANSIENT_EXECUTION_FAILED when retries exhausted', () => {
+    const res = transitionIssue(makeIssue({ status: 'in_progress' }), {
+      type: 'TRANSIENT_EXECUTION_FAILED',
+      reason: '503 Service Unavailable',
+      retryCount: 3,
+      maxRetries: 3,
+    });
+    expect(res.nextStatus).toBe('needs_human');
+    expect(res.effects[0]).toEqual({
+      type: 'SWAP_STATUS_LABEL',
+      issueNumber: 42,
+      from: 'in_progress',
+      to: 'needs_human',
+    });
+  });
 });

@@ -33,7 +33,13 @@ export interface GitHubPort {
   addLabels(issueNumber: number, labels: string[]): TE.TaskEither<DomainError, void>;
   removeLabel(issueNumber: number, label: string): TE.TaskEither<DomainError, void>;
   addComment(issueNumber: number, body: string): TE.TaskEither<DomainError, void>;
+  listIssueComments(issueNumber: number): TE.TaskEither<DomainError, string[]>;
   ensureLabels(labels: readonly LabelDefinition[]): TE.TaskEither<DomainError, void>;
+  dispatchWorkflow(
+    workflowFile: string,
+    ref: string,
+    inputs: Record<string, string>,
+  ): TE.TaskEither<DomainError, void>;
 
   // Native GitHub Sub-issues & Dependencies
   listSubIssues(issueNumber: number): TE.TaskEither<DomainError, number[]>;

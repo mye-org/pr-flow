@@ -45,7 +45,7 @@ agent:
   model: gemini-3.8-flash
   fallbackModels:
     - gemini-3-flash-preview
-    - gemini-2.5-flash-lite
+    - gemini-3.5-flash-lite
   maxRetries: 3
   timeoutMinutes: 20
 

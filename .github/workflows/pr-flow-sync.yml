@@ -10,6 +10,11 @@ concurrency:
   group: fsm-dispatcher
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
 jobs:
   sync:
     uses: mingqianye/pr-flow/.github/workflows/reusable-sync.yml@v1

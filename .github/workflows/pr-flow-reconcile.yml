@@ -9,6 +9,11 @@ concurrency:
   group: fsm-dispatcher
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
 jobs:
   reconcile:
     uses: mingqianye/pr-flow/.github/workflows/reusable-reconcile.yml@v1

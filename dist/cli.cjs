@@ -23443,6 +23443,11 @@ concurrency:
   group: fsm-dispatcher
   cancel-in-progress: false
 
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
 jobs:
   implement:
     if: >-
@@ -23463,6 +23468,11 @@ on:
 concurrency:
   group: pr-flow-review-\${{ github.event.pull_request.number }}
   cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
 
 jobs:
   review:
@@ -23487,6 +23497,11 @@ concurrency:
   group: fsm-dispatcher
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
 jobs:
   sync:
     uses: ${usesPrefix}/reusable-sync.yml@${opts.prFlowRef}
@@ -23505,6 +23520,11 @@ on:
 concurrency:
   group: fsm-dispatcher
   cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
 
 jobs:
   reconcile:

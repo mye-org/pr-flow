@@ -99,11 +99,34 @@ program
   .description('Project-agnostic Agile Issue-to-PR workflow engine')
   .version('1.0.0');
 
+function printPreflightReport(
+  checks: ReadonlyArray<{
+    name: string;
+    status: 'pass' | 'warn' | 'fail';
+    message: string;
+    remediation?: string;
+  }>,
+): boolean {
+  console.log('\npr-flow Preflight Checks:');
+  let hasFailures = false;
+  for (const check of checks) {
+    const tag = check.status === 'pass' ? '[PASS]' : check.status === 'warn' ? '[WARN]' : '[FAIL]';
+    console.log(`  ${tag} ${check.name}: ${check.message}`);
+    if (check.remediation) {
+      console.log(`         Fix: ${check.remediation}`);
+    }
+    if (check.status === 'fail') {
+      hasFailures = true;
+    }
+  }
+  return hasFailures;
+}
+
 program
   .command('init')
   .description('Bootstrap pr-flow config, AGENTS.md, workflows, and agent skills in a target repository')
   .option('--dir <path>', 'Target repository directory', '.')
-  .option('--owner <owner>', 'GitHub owner of the pr-flow repository', 'mingqianye')
+  .option('--owner <owner>', 'GitHub owner of the pr-flow repository', 'mye-org')
   .option('--ref <ref>', 'Git ref/tag of pr-flow workflows', 'v1')
   .option('--base-branch <branch>', 'Default base branch', 'main')
   .option('--wip-limit <n>', 'Max concurrent in-progress issues', '4')
@@ -113,7 +136,8 @@ program
   .option('--force', 'Overwrite existing files', false)
   .option('--sync-labels', 'Also sync GitHub labels via GITHUB_TOKEN', false)
   .option('--create-custom-field', 'Also create/verify the pr-flow-status organization Issue Field via GITHUB_TOKEN', false)
-  .option('--repo <owner/repo>', 'Target GitHub repository for --sync-labels / --create-custom-field')
+  .option('--skip-checks', 'Skip GitHub repository preflight checks', false)
+  .option('--repo <owner/repo>', 'Target GitHub repository for --sync-labels / --create-custom-field / preflight checks')
   .action(async (opts) => {
     const result = generateInitFiles({
       targetDir: path.resolve(opts.dir),
@@ -141,6 +165,47 @@ program
       const github = createGitHubFromEnv(opts.repo);
       await runOrExit(github.ensureStatusField());
       console.log('Synced pr-flow-status organization Issue Field.');
+    }
+
+    const repoSlug = opts.repo ?? process.env.GITHUB_REPOSITORY;
+    if (!opts.skipChecks && process.env.GITHUB_TOKEN && repoSlug) {
+      const github = createGitHubFromEnv(repoSlug);
+      const checks = await runOrExit(
+        github.checkSetupPrerequisites({
+          prFlowOwner: opts.owner,
+          expectedLabels: DEFAULT_LABELS,
+        }),
+      );
+      const hasFailures = printPreflightReport(checks);
+      if (hasFailures) {
+        process.exitCode = 1;
+      }
+    } else if (!opts.skipChecks) {
+      console.log(
+        `\nTip: Run \`GITHUB_TOKEN=$(gh auth token) npx --yes github:${opts.owner}/pr-flow#${opts.ref} doctor --repo <owner>/<repo>\` to verify GitHub Actions permissions, Issue Field, labels, and secrets.`,
+      );
+    }
+  });
+
+program
+  .command('doctor')
+  .description('Verify GitHub repository prerequisites (pr-flow visibility, Actions PR permissions, Issue Field, labels, secrets)')
+  .option('--repo <owner/repo>', 'GitHub repository (defaults to GITHUB_REPOSITORY)')
+  .option('--owner <owner>', 'GitHub owner of the pr-flow repository', 'mye-org')
+  .option('--field-name <name>', 'Issue Field name', 'pr-flow-status')
+  .option('--secret-name <name>', 'Required Actions secret name', 'GEMINI_API_KEY')
+  .action(async (opts) => {
+    const github = createGitHubFromEnv(opts.repo, opts.fieldName);
+    const checks = await runOrExit(
+      github.checkSetupPrerequisites({
+        prFlowOwner: opts.owner,
+        expectedLabels: DEFAULT_LABELS,
+        secretName: opts.secretName,
+      }),
+    );
+    const hasFailures = printPreflightReport(checks);
+    if (hasFailures) {
+      process.exit(1);
     }
   });
 

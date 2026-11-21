@@ -35,6 +35,7 @@ const mockGithub = (): GitHubPort => ({
   listOpenAiManagedPrs: vi.fn(),
   createPullRequest: vi.fn(),
   mergePullRequest: vi.fn(),
+  checkSetupPrerequisites: vi.fn(),
   addPrComment: vi.fn(),
   getPrReviewComments: vi.fn(),
 });

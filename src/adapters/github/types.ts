@@ -32,6 +32,13 @@ export interface ManagedPrSummary {
   latestReviewState: string | null;
 }
 
+export interface PreflightCheckResult {
+  name: string;
+  status: 'pass' | 'warn' | 'fail';
+  message: string;
+  remediation?: string;
+}
+
 export interface GitHubPort {
   getIssue(issueNumber: number): TE.TaskEither<DomainError, IssueNode>;
   listAllIssues(state?: 'open' | 'closed' | 'all'): TE.TaskEither<DomainError, IssueNode[]>;
@@ -63,6 +70,11 @@ export interface GitHubPort {
   listOpenAiManagedPrs(): TE.TaskEither<DomainError, ManagedPrSummary[]>;
   createPullRequest(input: CreatePullRequestInput): TE.TaskEither<DomainError, PullRequestSummary>;
   mergePullRequest(prNumber: number, method: 'squash' | 'merge' | 'rebase'): TE.TaskEither<DomainError, void>;
+  checkSetupPrerequisites(opts: {
+    prFlowOwner: string;
+    expectedLabels?: readonly LabelDefinition[];
+    secretName?: string;
+  }): TE.TaskEither<DomainError, PreflightCheckResult[]>;
   addPrComment(prNumber: number, body: string): TE.TaskEither<DomainError, void>;
   getPrReviewComments(prNumber: number): TE.TaskEither<DomainError, string[]>;
 }

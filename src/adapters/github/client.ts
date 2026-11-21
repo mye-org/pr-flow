@@ -18,6 +18,7 @@ import type {
   CreatePullRequestInput,
   GitHubPort,
   ManagedPrSummary,
+  PreflightCheckResult,
   PullRequestSummary,
 } from './types.js';
 
@@ -926,6 +927,190 @@ export class OctokitGitHubAdapter implements GitHubPort {
         return collected;
       },
       (err) => toGitHubError(`Failed to fetch review comments for PR #${prNumber}`, err),
+    );
+  }
+
+  checkSetupPrerequisites(opts: {
+    prFlowOwner: string;
+    expectedLabels?: readonly LabelDefinition[];
+    secretName?: string;
+  }): TE.TaskEither<DomainError, PreflightCheckResult[]> {
+    return TE.tryCatch(
+      async () => {
+        const results: PreflightCheckResult[] = [];
+        const secretName = opts.secretName ?? 'GEMINI_API_KEY';
+
+        // 1. Check pr-flow repository visibility (if target is a different repo)
+        if (`${this.owner}/${this.repo}` !== `${opts.prFlowOwner}/pr-flow`) {
+          try {
+            const res = await this.octokit.request('GET /repos/{owner}/{repo}', {
+              owner: opts.prFlowOwner,
+              repo: 'pr-flow',
+            });
+            const isPrivate = Boolean((res.data as { private?: boolean }).private);
+            if (isPrivate) {
+              results.push({
+                name: 'pr-flow repository visibility',
+                status: 'warn',
+                message: `Repository "${opts.prFlowOwner}/pr-flow" is private. Consuming repos cannot clone it with their default GITHUB_TOKEN.`,
+                remediation: `Make "${opts.prFlowOwner}/pr-flow" public, or configure a read token for actions/checkout in reusable workflows.`,
+              });
+            } else {
+              results.push({
+                name: 'pr-flow repository visibility',
+                status: 'pass',
+                message: `"${opts.prFlowOwner}/pr-flow" is public and accessible to consuming workflows.`,
+              });
+            }
+          } catch {
+            results.push({
+              name: 'pr-flow repository visibility',
+              status: 'warn',
+              message: `Could not verify visibility of "${opts.prFlowOwner}/pr-flow".`,
+            });
+          }
+        }
+
+        // 2. Check GitHub Actions workflow PR permissions on target repo
+        try {
+          const wfPerms = await this.octokit.request(
+            'GET /repos/{owner}/{repo}/actions/permissions/workflow',
+            { owner: this.owner, repo: this.repo },
+          );
+          const canCreatePr = Boolean(
+            (wfPerms.data as { can_approve_pull_request_reviews?: boolean })
+              .can_approve_pull_request_reviews,
+          );
+          if (canCreatePr) {
+            results.push({
+              name: 'Actions PR permissions',
+              status: 'pass',
+              message: `GitHub Actions is permitted to create and approve pull requests on "${this.owner}/${this.repo}".`,
+            });
+          } else {
+            results.push({
+              name: 'Actions PR permissions',
+              status: 'fail',
+              message: `GitHub Actions is NOT permitted to create or approve pull requests on "${this.owner}/${this.repo}" (finalize will fail with HTTP 403).`,
+              remediation: `Enable "Allow GitHub Actions to create and approve pull requests" at https://github.com/${this.owner}/${this.repo}/settings/actions (or run: gh api -X PUT repos/${this.owner}/${this.repo}/actions/permissions/workflow -F can_approve_pull_request_reviews=true).`,
+            });
+          }
+        } catch {
+          results.push({
+            name: 'Actions PR permissions',
+            status: 'warn',
+            message: `Could not inspect Actions workflow permissions (token may lack administration:read).`,
+            remediation: `Verify "Allow GitHub Actions to create and approve pull requests" is enabled at https://github.com/${this.owner}/${this.repo}/settings/actions.`,
+          });
+        }
+
+        // 3. Check pr-flow-status Issue Field via GraphQL
+        try {
+          const field = await this.findStatusFieldViaGraphql();
+          if (!field) {
+            results.push({
+              name: `${this.statusFieldName} Issue Field`,
+              status: 'fail',
+              message: `Issue Field "${this.statusFieldName}" was not found on "${this.owner}/${this.repo}".`,
+              remediation: `Run \`GITHUB_TOKEN=$(gh auth token) npx --yes github:${opts.prFlowOwner}/pr-flow#v1 fields sync --repo ${this.owner}/${this.repo}\` with an org-admin token, or create it at https://github.com/organizations/${this.owner}/settings/issue-fields.`,
+            });
+          } else {
+            const missingOpts = PR_FLOW_STATUS_OPTIONS.filter(
+              (opt) => !field.optionsByName.has(opt.name),
+            );
+            if (missingOpts.length > 0) {
+              results.push({
+                name: `${this.statusFieldName} Issue Field`,
+                status: 'fail',
+                message: `Issue Field "${this.statusFieldName}" is missing options: ${missingOpts.map((m) => m.name).join(', ')}.`,
+                remediation: `Add missing options at https://github.com/organizations/${this.owner}/settings/issue-fields.`,
+              });
+            } else {
+              results.push({
+                name: `${this.statusFieldName} Issue Field`,
+                status: 'pass',
+                message: `Issue Field "${this.statusFieldName}" is configured with all ${PR_FLOW_STATUS_OPTIONS.length} status options.`,
+              });
+            }
+          }
+        } catch (err) {
+          results.push({
+            name: `${this.statusFieldName} Issue Field`,
+            status: 'warn',
+            message: `Could not query "${this.statusFieldName}" via GraphQL: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+
+        // 4. Check required labels
+        if (opts.expectedLabels && opts.expectedLabels.length > 0) {
+          try {
+            const existing = await this.octokit.request('GET /repos/{owner}/{repo}/labels', {
+              owner: this.owner,
+              repo: this.repo,
+              per_page: 100,
+            });
+            const existingNames = new Set((existing.data as Array<{ name: string }>).map((l) => l.name));
+            const missingLabels = opts.expectedLabels.filter((l) => !existingNames.has(l.name));
+            if (missingLabels.length > 0) {
+              results.push({
+                name: 'Required labels',
+                status: 'fail',
+                message: `Missing labels on "${this.owner}/${this.repo}": ${missingLabels.map((l) => l.name).join(', ')}.`,
+                remediation: `Run \`GITHUB_TOKEN=$(gh auth token) npx --yes github:${opts.prFlowOwner}/pr-flow#v1 labels sync --repo ${this.owner}/${this.repo}\`.`,
+              });
+            } else {
+              results.push({
+                name: 'Required labels',
+                status: 'pass',
+                message: `All ${opts.expectedLabels.length} required pr-flow labels exist.`,
+              });
+            }
+          } catch {
+            results.push({
+              name: 'Required labels',
+              status: 'warn',
+              message: `Could not list labels on "${this.owner}/${this.repo}".`,
+            });
+          }
+        }
+
+        // 5. Check Actions secret (e.g. GEMINI_API_KEY)
+        try {
+          await this.octokit.request('GET /repos/{owner}/{repo}/actions/secrets/{secret_name}', {
+            owner: this.owner,
+            repo: this.repo,
+            secret_name: secretName,
+          });
+          results.push({
+            name: `Actions secret (${secretName})`,
+            status: 'pass',
+            message: `Actions secret "${secretName}" is configured on "${this.owner}/${this.repo}".`,
+          });
+        } catch (err) {
+          const status =
+            typeof err === 'object' && err !== null && 'status' in err
+              ? Number((err as { status: unknown }).status)
+              : undefined;
+          if (status === 404) {
+            results.push({
+              name: `Actions secret (${secretName})`,
+              status: 'fail',
+              message: `Actions secret "${secretName}" is not configured on "${this.owner}/${this.repo}".`,
+              remediation: `Add "${secretName}" at https://github.com/${this.owner}/${this.repo}/settings/secrets/actions (or run: gh secret set ${secretName} --repo ${this.owner}/${this.repo}).`,
+            });
+          } else {
+            results.push({
+              name: `Actions secret (${secretName})`,
+              status: 'warn',
+              message: `Could not inspect Actions secret "${secretName}" (token may lack secrets:read).`,
+              remediation: `Verify "${secretName}" is set at https://github.com/${this.owner}/${this.repo}/settings/secrets/actions.`,
+            });
+          }
+        }
+
+        return results;
+      },
+      (err) => toGitHubError(`Failed to run setup preflight checks for ${this.owner}/${this.repo}`, err),
     );
   }
 }

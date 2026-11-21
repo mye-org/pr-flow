@@ -15401,7 +15401,10 @@ ${verify.output.slice(-1500)}`,
     (0, import_node_child_process.execSync)("git add -A", { cwd, stdio: "pipe" });
     const relOut = path.relative(cwd, outputDir);
     if (relOut && !relOut.startsWith("..") && !path.isAbsolute(relOut)) {
-      (0, import_node_child_process.execSync)(`git reset -- ${JSON.stringify(relOut)}`, { cwd, stdio: "pipe" });
+      (0, import_node_child_process.execSync)(`git reset -q -- ${JSON.stringify(relOut)}`, { cwd, stdio: "pipe" });
+    }
+    if (fs.existsSync(path.join(cwd, "_pr_flow"))) {
+      (0, import_node_child_process.execSync)("git reset -q -- _pr_flow", { cwd, stdio: "pipe" });
     }
     const diff = (0, import_node_child_process.execSync)("git diff --cached --binary", { cwd, encoding: "utf-8" });
     fs.writeFileSync(patchPath, diff, "utf-8");
@@ -19727,6 +19730,170 @@ var OctokitGitHubAdapter = class {
         return collected;
       },
       (err) => toGitHubError(`Failed to fetch review comments for PR #${prNumber}`, err)
+    );
+  }
+  checkSetupPrerequisites(opts) {
+    return tryCatch(
+      async () => {
+        const results = [];
+        const secretName = opts.secretName ?? "GEMINI_API_KEY";
+        if (`${this.owner}/${this.repo}` !== `${opts.prFlowOwner}/pr-flow`) {
+          try {
+            const res = await this.octokit.request("GET /repos/{owner}/{repo}", {
+              owner: opts.prFlowOwner,
+              repo: "pr-flow"
+            });
+            const isPrivate = Boolean(res.data.private);
+            if (isPrivate) {
+              results.push({
+                name: "pr-flow repository visibility",
+                status: "warn",
+                message: `Repository "${opts.prFlowOwner}/pr-flow" is private. Consuming repos cannot clone it with their default GITHUB_TOKEN.`,
+                remediation: `Make "${opts.prFlowOwner}/pr-flow" public, or configure a read token for actions/checkout in reusable workflows.`
+              });
+            } else {
+              results.push({
+                name: "pr-flow repository visibility",
+                status: "pass",
+                message: `"${opts.prFlowOwner}/pr-flow" is public and accessible to consuming workflows.`
+              });
+            }
+          } catch {
+            results.push({
+              name: "pr-flow repository visibility",
+              status: "warn",
+              message: `Could not verify visibility of "${opts.prFlowOwner}/pr-flow".`
+            });
+          }
+        }
+        try {
+          const wfPerms = await this.octokit.request(
+            "GET /repos/{owner}/{repo}/actions/permissions/workflow",
+            { owner: this.owner, repo: this.repo }
+          );
+          const canCreatePr = Boolean(
+            wfPerms.data.can_approve_pull_request_reviews
+          );
+          if (canCreatePr) {
+            results.push({
+              name: "Actions PR permissions",
+              status: "pass",
+              message: `GitHub Actions is permitted to create and approve pull requests on "${this.owner}/${this.repo}".`
+            });
+          } else {
+            results.push({
+              name: "Actions PR permissions",
+              status: "fail",
+              message: `GitHub Actions is NOT permitted to create or approve pull requests on "${this.owner}/${this.repo}" (finalize will fail with HTTP 403).`,
+              remediation: `Enable "Allow GitHub Actions to create and approve pull requests" at https://github.com/${this.owner}/${this.repo}/settings/actions (or run: gh api -X PUT repos/${this.owner}/${this.repo}/actions/permissions/workflow -F can_approve_pull_request_reviews=true).`
+            });
+          }
+        } catch {
+          results.push({
+            name: "Actions PR permissions",
+            status: "warn",
+            message: `Could not inspect Actions workflow permissions (token may lack administration:read).`,
+            remediation: `Verify "Allow GitHub Actions to create and approve pull requests" is enabled at https://github.com/${this.owner}/${this.repo}/settings/actions.`
+          });
+        }
+        try {
+          const field = await this.findStatusFieldViaGraphql();
+          if (!field) {
+            results.push({
+              name: `${this.statusFieldName} Issue Field`,
+              status: "fail",
+              message: `Issue Field "${this.statusFieldName}" was not found on "${this.owner}/${this.repo}".`,
+              remediation: `Run \`GITHUB_TOKEN=$(gh auth token) npx --yes github:${opts.prFlowOwner}/pr-flow#v1 fields sync --repo ${this.owner}/${this.repo}\` with an org-admin token, or create it at https://github.com/organizations/${this.owner}/settings/issue-fields.`
+            });
+          } else {
+            const missingOpts = PR_FLOW_STATUS_OPTIONS.filter(
+              (opt) => !field.optionsByName.has(opt.name)
+            );
+            if (missingOpts.length > 0) {
+              results.push({
+                name: `${this.statusFieldName} Issue Field`,
+                status: "fail",
+                message: `Issue Field "${this.statusFieldName}" is missing options: ${missingOpts.map((m) => m.name).join(", ")}.`,
+                remediation: `Add missing options at https://github.com/organizations/${this.owner}/settings/issue-fields.`
+              });
+            } else {
+              results.push({
+                name: `${this.statusFieldName} Issue Field`,
+                status: "pass",
+                message: `Issue Field "${this.statusFieldName}" is configured with all ${PR_FLOW_STATUS_OPTIONS.length} status options.`
+              });
+            }
+          }
+        } catch (err) {
+          results.push({
+            name: `${this.statusFieldName} Issue Field`,
+            status: "warn",
+            message: `Could not query "${this.statusFieldName}" via GraphQL: ${err instanceof Error ? err.message : String(err)}`
+          });
+        }
+        if (opts.expectedLabels && opts.expectedLabels.length > 0) {
+          try {
+            const existing = await this.octokit.request("GET /repos/{owner}/{repo}/labels", {
+              owner: this.owner,
+              repo: this.repo,
+              per_page: 100
+            });
+            const existingNames = new Set(existing.data.map((l) => l.name));
+            const missingLabels = opts.expectedLabels.filter((l) => !existingNames.has(l.name));
+            if (missingLabels.length > 0) {
+              results.push({
+                name: "Required labels",
+                status: "fail",
+                message: `Missing labels on "${this.owner}/${this.repo}": ${missingLabels.map((l) => l.name).join(", ")}.`,
+                remediation: `Run \`GITHUB_TOKEN=$(gh auth token) npx --yes github:${opts.prFlowOwner}/pr-flow#v1 labels sync --repo ${this.owner}/${this.repo}\`.`
+              });
+            } else {
+              results.push({
+                name: "Required labels",
+                status: "pass",
+                message: `All ${opts.expectedLabels.length} required pr-flow labels exist.`
+              });
+            }
+          } catch {
+            results.push({
+              name: "Required labels",
+              status: "warn",
+              message: `Could not list labels on "${this.owner}/${this.repo}".`
+            });
+          }
+        }
+        try {
+          await this.octokit.request("GET /repos/{owner}/{repo}/actions/secrets/{secret_name}", {
+            owner: this.owner,
+            repo: this.repo,
+            secret_name: secretName
+          });
+          results.push({
+            name: `Actions secret (${secretName})`,
+            status: "pass",
+            message: `Actions secret "${secretName}" is configured on "${this.owner}/${this.repo}".`
+          });
+        } catch (err) {
+          const status = typeof err === "object" && err !== null && "status" in err ? Number(err.status) : void 0;
+          if (status === 404) {
+            results.push({
+              name: `Actions secret (${secretName})`,
+              status: "fail",
+              message: `Actions secret "${secretName}" is not configured on "${this.owner}/${this.repo}".`,
+              remediation: `Add "${secretName}" at https://github.com/${this.owner}/${this.repo}/settings/secrets/actions (or run: gh secret set ${secretName} --repo ${this.owner}/${this.repo}).`
+            });
+          } else {
+            results.push({
+              name: `Actions secret (${secretName})`,
+              status: "warn",
+              message: `Could not inspect Actions secret "${secretName}" (token may lack secrets:read).`,
+              remediation: `Verify "${secretName}" is set at https://github.com/${this.owner}/${this.repo}/settings/secrets/actions.`
+            });
+          }
+        }
+        return results;
+      },
+      (err) => toGitHubError(`Failed to run setup preflight checks for ${this.owner}/${this.repo}`, err)
     );
   }
 };
@@ -24230,7 +24397,22 @@ function runGit(cmd, cwd) {
 }
 var program2 = new Command();
 program2.name("pr-flow").description("Project-agnostic Agile Issue-to-PR workflow engine").version("1.0.0");
-program2.command("init").description("Bootstrap pr-flow config, AGENTS.md, workflows, and agent skills in a target repository").option("--dir <path>", "Target repository directory", ".").option("--owner <owner>", "GitHub owner of the pr-flow repository", "mingqianye").option("--ref <ref>", "Git ref/tag of pr-flow workflows", "v1").option("--base-branch <branch>", "Default base branch", "main").option("--wip-limit <n>", "Max concurrent in-progress issues", "4").option("--setup-command <cmd>", "Workspace setup command", "npm ci").option("--verify-command <cmd>", "Workspace verification command", "npm test").option("--review-mode <mode>", "Review trigger mode (changes_requested|comment|both)", "changes_requested").option("--force", "Overwrite existing files", false).option("--sync-labels", "Also sync GitHub labels via GITHUB_TOKEN", false).option("--create-custom-field", "Also create/verify the pr-flow-status organization Issue Field via GITHUB_TOKEN", false).option("--repo <owner/repo>", "Target GitHub repository for --sync-labels / --create-custom-field").action(async (opts) => {
+function printPreflightReport(checks) {
+  console.log("\npr-flow Preflight Checks:");
+  let hasFailures = false;
+  for (const check of checks) {
+    const tag = check.status === "pass" ? "[PASS]" : check.status === "warn" ? "[WARN]" : "[FAIL]";
+    console.log(`  ${tag} ${check.name}: ${check.message}`);
+    if (check.remediation) {
+      console.log(`         Fix: ${check.remediation}`);
+    }
+    if (check.status === "fail") {
+      hasFailures = true;
+    }
+  }
+  return hasFailures;
+}
+program2.command("init").description("Bootstrap pr-flow config, AGENTS.md, workflows, and agent skills in a target repository").option("--dir <path>", "Target repository directory", ".").option("--owner <owner>", "GitHub owner of the pr-flow repository", "mye-org").option("--ref <ref>", "Git ref/tag of pr-flow workflows", "v1").option("--base-branch <branch>", "Default base branch", "main").option("--wip-limit <n>", "Max concurrent in-progress issues", "4").option("--setup-command <cmd>", "Workspace setup command", "npm ci").option("--verify-command <cmd>", "Workspace verification command", "npm test").option("--review-mode <mode>", "Review trigger mode (changes_requested|comment|both)", "changes_requested").option("--force", "Overwrite existing files", false).option("--sync-labels", "Also sync GitHub labels via GITHUB_TOKEN", false).option("--create-custom-field", "Also create/verify the pr-flow-status organization Issue Field via GITHUB_TOKEN", false).option("--skip-checks", "Skip GitHub repository preflight checks", false).option("--repo <owner/repo>", "Target GitHub repository for --sync-labels / --create-custom-field / preflight checks").action(async (opts) => {
   const result = generateInitFiles({
     targetDir: path3.resolve(opts.dir),
     prFlowOwner: opts.owner,
@@ -24254,6 +24436,39 @@ program2.command("init").description("Bootstrap pr-flow config, AGENTS.md, workf
     const github = createGitHubFromEnv(opts.repo);
     await runOrExit(github.ensureStatusField());
     console.log("Synced pr-flow-status organization Issue Field.");
+  }
+  const repoSlug = opts.repo ?? process.env.GITHUB_REPOSITORY;
+  if (!opts.skipChecks && process.env.GITHUB_TOKEN && repoSlug) {
+    const github = createGitHubFromEnv(repoSlug);
+    const checks = await runOrExit(
+      github.checkSetupPrerequisites({
+        prFlowOwner: opts.owner,
+        expectedLabels: DEFAULT_LABELS
+      })
+    );
+    const hasFailures = printPreflightReport(checks);
+    if (hasFailures) {
+      process.exitCode = 1;
+    }
+  } else if (!opts.skipChecks) {
+    console.log(
+      `
+Tip: Run \`GITHUB_TOKEN=$(gh auth token) npx --yes github:${opts.owner}/pr-flow#${opts.ref} doctor --repo <owner>/<repo>\` to verify GitHub Actions permissions, Issue Field, labels, and secrets.`
+    );
+  }
+});
+program2.command("doctor").description("Verify GitHub repository prerequisites (pr-flow visibility, Actions PR permissions, Issue Field, labels, secrets)").option("--repo <owner/repo>", "GitHub repository (defaults to GITHUB_REPOSITORY)").option("--owner <owner>", "GitHub owner of the pr-flow repository", "mye-org").option("--field-name <name>", "Issue Field name", "pr-flow-status").option("--secret-name <name>", "Required Actions secret name", "GEMINI_API_KEY").action(async (opts) => {
+  const github = createGitHubFromEnv(opts.repo, opts.fieldName);
+  const checks = await runOrExit(
+    github.checkSetupPrerequisites({
+      prFlowOwner: opts.owner,
+      expectedLabels: DEFAULT_LABELS,
+      secretName: opts.secretName
+    })
+  );
+  const hasFailures = printPreflightReport(checks);
+  if (hasFailures) {
+    process.exit(1);
   }
 });
 var labelsCmd = program2.command("labels").description("Manage pr-flow GitHub labels");

@@ -214,12 +214,15 @@ export function runAgentExecution(params: {
   };
   fs.writeFileSync(resultPath, JSON.stringify(finalResult, null, 2), 'utf-8');
 
-  // Stage untracked files (excluding outputDir) and export full git diff into changes.patch
+  // Stage untracked files (excluding outputDir and _pr_flow) and export full git diff into changes.patch
   try {
     execSync('git add -A', { cwd, stdio: 'pipe' });
     const relOut = path.relative(cwd, outputDir);
     if (relOut && !relOut.startsWith('..') && !path.isAbsolute(relOut)) {
-      execSync(`git reset -- ${JSON.stringify(relOut)}`, { cwd, stdio: 'pipe' });
+      execSync(`git reset -q -- ${JSON.stringify(relOut)}`, { cwd, stdio: 'pipe' });
+    }
+    if (fs.existsSync(path.join(cwd, '_pr_flow'))) {
+      execSync('git reset -q -- _pr_flow', { cwd, stdio: 'pipe' });
     }
     const diff = execSync('git diff --cached --binary', { cwd, encoding: 'utf-8' });
     fs.writeFileSync(patchPath, diff, 'utf-8');

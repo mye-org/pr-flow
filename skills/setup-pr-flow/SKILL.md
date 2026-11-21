@@ -96,13 +96,25 @@ GITHUB_TOKEN=$(gh auth token) npx --yes github:<prFlowOwner>/pr-flow#<prFlowRef>
 
 ---
 
-## Stage 5: Configure Repository Actions Secret
+## Stage 5: Configure Repository Actions Secret & Workflow Permissions
 
-Guide the user to configure the AI provider secret (`GEMINI_API_KEY` by default, or their custom provider secret):
-- **GitHub Web UI:** `https://github.com/<owner>/<repo>/settings/secrets/actions` → **New repository secret** → `GEMINI_API_KEY`
-- **Or via `gh` CLI locally:** `gh secret set GEMINI_API_KEY --repo <owner>/<repo>`
+1. **AI Provider Secret (`GEMINI_API_KEY` by default):**
+   - **GitHub Web UI:** `https://github.com/<owner>/<repo>/settings/secrets/actions` → **New repository secret** → `GEMINI_API_KEY`
+   - **Or via `gh` CLI locally:** `gh secret set GEMINI_API_KEY --repo <owner>/<repo>`
+2. **GitHub Actions Pull Request Permissions:**
+   - Ensure **"Allow GitHub Actions to create and approve pull requests"** is enabled (otherwise `finalize` will fail with HTTP `403` when opening `ai/issue-<N>` PRs):
+   - **GitHub Web UI:** `https://github.com/<owner>/<repo>/settings/actions` → **Workflow permissions** → check **"Allow GitHub Actions to create and approve pull requests"** → **Save**.
+   - **Or via `gh` CLI locally:**
+     ```bash
+     gh api -X PUT repos/<owner>/<repo>/actions/permissions/workflow -F can_approve_pull_request_reviews=true
+     ```
+3. **Verify everything with `pr-flow doctor`:**
+   ```bash
+   GITHUB_TOKEN=$(gh auth token) npx --yes github:<prFlowOwner>/pr-flow#<prFlowRef> doctor --repo <owner>/<repo> --owner <prFlowOwner>
+   ```
+   Resolve any `[FAIL]` or `[WARN]` items before proceeding.
 
-**Wizard prompt:** Ask the user to confirm once the secret is added (or if they plan to add it right after pushing).
+**Wizard prompt:** Ask the user to confirm once the secret and Actions PR permissions are configured (or if they plan to configure them right after pushing).
 
 ---
 

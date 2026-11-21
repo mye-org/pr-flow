@@ -196,3 +196,131 @@ describe('OctokitGitHubAdapter.ensureStatusField', () => {
   });
 });
 
+describe('OctokitGitHubAdapter.checkSetupPrerequisites', () => {
+  it('reports pass for all checks when repo and org are properly configured', async () => {
+    const adapter = new OctokitGitHubAdapter({
+      token: 'test-token',
+      owner: 'mye-org',
+      repo: 'pr-flow-demo',
+    });
+    const octokit = (
+      adapter as unknown as {
+        octokit: {
+          graphql: (...args: unknown[]) => Promise<unknown>;
+          request: (route: string, ...args: unknown[]) => Promise<unknown>;
+          rest: {
+            issues: {
+              listLabelsForRepo: (...args: unknown[]) => Promise<unknown>;
+            };
+          };
+        };
+      }
+    ).octokit;
+
+    vi.spyOn(octokit, 'request').mockImplementation(async (route: string) => {
+      if (route === 'GET /repos/{owner}/{repo}') {
+        return { data: { private: false } };
+      }
+      if (route === 'GET /repos/{owner}/{repo}/actions/permissions/workflow') {
+        return { data: { can_approve_pull_request_reviews: true } };
+      }
+      if (route === 'GET /repos/{owner}/{repo}/labels') {
+        return { data: [{ name: 'type:epic' }, { name: 'type:task' }] };
+      }
+      if (route === 'GET /repos/{owner}/{repo}/actions/secrets/{secret_name}') {
+        return { data: { name: 'GEMINI_API_KEY' } };
+      }
+      throw new Error(`Unexpected route: ${route}`);
+    });
+
+    vi.spyOn(octokit, 'graphql').mockResolvedValueOnce({
+      repository: {
+        issueFields: {
+          nodes: [
+            {
+              __typename: 'IssueFieldSingleSelect',
+              id: 'IFSS_123',
+              name: 'pr-flow-status',
+              options: [
+                { id: 'opt1', name: 'backlog' },
+                { id: 'opt2', name: 'blocked-dep' },
+                { id: 'opt3', name: 'ready' },
+                { id: 'opt4', name: 'in-progress' },
+                { id: 'opt5', name: 'review-pending' },
+                { id: 'opt6', name: 'fixed' },
+                { id: 'opt7', name: 'needs-human' },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    const res = await adapter.checkSetupPrerequisites({
+      prFlowOwner: 'mye-org',
+      expectedLabels: [
+        { name: 'type:epic', color: '3e4b9e', description: 'Epic' },
+        { name: 'type:task', color: '006b75', description: 'Task' },
+      ],
+    })();
+
+    expect(E.isRight(res)).toBe(true);
+    if (E.isRight(res)) {
+      expect(res.right).toHaveLength(5);
+      expect(res.right.every((c) => c.status === 'pass')).toBe(true);
+    }
+  });
+
+  it('reports fail/warn with remediation when prerequisites are missing', async () => {
+    const adapter = new OctokitGitHubAdapter({
+      token: 'test-token',
+      owner: 'mye-org',
+      repo: 'pr-flow-demo',
+    });
+    const octokit = (
+      adapter as unknown as {
+        octokit: {
+          graphql: (...args: unknown[]) => Promise<unknown>;
+          request: (route: string, ...args: unknown[]) => Promise<unknown>;
+        };
+      }
+    ).octokit;
+
+    vi.spyOn(octokit, 'request').mockImplementation(async (route: string) => {
+      if (route === 'GET /repos/{owner}/{repo}') {
+        return { data: { private: true } };
+      }
+      if (route === 'GET /repos/{owner}/{repo}/actions/permissions/workflow') {
+        return { data: { can_approve_pull_request_reviews: false } };
+      }
+      if (route === 'GET /repos/{owner}/{repo}/labels') {
+        return { data: [] };
+      }
+      if (route === 'GET /repos/{owner}/{repo}/actions/secrets/{secret_name}') {
+        throw Object.assign(new Error('Not Found'), { status: 404 });
+      }
+      throw new Error(`Unexpected route: ${route}`);
+    });
+
+    vi.spyOn(octokit, 'graphql').mockResolvedValueOnce({
+      repository: { issueFields: { nodes: [] } },
+    });
+
+    const res = await adapter.checkSetupPrerequisites({
+      prFlowOwner: 'mye-org',
+      expectedLabels: [{ name: 'type:task', color: '006b75', description: 'Task' }],
+    })();
+
+    expect(E.isRight(res)).toBe(true);
+    if (E.isRight(res)) {
+      const byName = new Map(res.right.map((c) => [c.name, c]));
+      expect(byName.get('pr-flow repository visibility')?.status).toBe('warn');
+      expect(byName.get('Actions PR permissions')?.status).toBe('fail');
+      expect(byName.get('Actions PR permissions')?.remediation).toContain('can_approve_pull_request_reviews=true');
+      expect(byName.get('pr-flow-status Issue Field')?.status).toBe('fail');
+      expect(byName.get('Required labels')?.status).toBe('fail');
+      expect(byName.get('Actions secret (GEMINI_API_KEY)')?.status).toBe('fail');
+    }
+  });
+});
+

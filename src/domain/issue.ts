@@ -116,12 +116,20 @@ export function extractTypeFromLabels(labels: readonly string[]): IssueType {
   return 'task';
 }
 
+export const ResolvedCommentSchema = z.object({
+  threadId: z.string().min(1),
+  reply: z.string().min(1),
+});
+
+export type ResolvedComment = z.infer<typeof ResolvedCommentSchema>;
+
 export const AgentResultSchema = z.object({
   status: z.enum(['success', 'needs_human', 'failed', 'retryable']),
   summary: z.string().min(1),
   reason: z.string().optional(),
   testsRun: z.boolean().optional(),
   filesChanged: z.array(z.string()).optional(),
+  resolvedComments: z.array(ResolvedCommentSchema).optional(),
 });
 
 export type AgentResult = z.infer<typeof AgentResultSchema>;

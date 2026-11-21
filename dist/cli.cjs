@@ -11112,7 +11112,28 @@ ${params.issue.body || "(No description provided)"}
 }
 function buildReviewPrompt(params) {
   const agentsSection = formatAgentsSection(params.agentsMd);
-  const commentsBlock = params.reviewComments.length > 0 ? params.reviewComments.join("\n\n") : "(No unresolved review comments found; inspect recent PR feedback.)";
+  const threads = params.reviewThreads ?? [];
+  const threadsBlock = threads.length > 0 ? threads.map((t2) => {
+    const loc = t2.line !== null ? `${t2.path}:${t2.line}` : t2.path;
+    const msgs = t2.comments.map((c2) => `  - **${c2.author}**: ${c2.body}`).join("\n");
+    return `- **Thread ID:** \`${t2.threadId}\` | **Location:** \`${loc}\`
+${msgs}`;
+  }).join("\n\n") : "";
+  const generalBlock = params.reviewComments.length > 0 ? params.reviewComments.join("\n\n") : "";
+  const feedbackSections = [];
+  if (threadsBlock) {
+    feedbackSections.push(`### Unresolved Inline Review Threads
+${threadsBlock}`);
+  }
+  if (generalBlock) {
+    feedbackSections.push(`### General PR & Review Comments
+${generalBlock}`);
+  }
+  const commentsBlock = feedbackSections.length > 0 ? feedbackSections.join("\n\n") : "(No unresolved review comments found; inspect recent PR feedback.)";
+  const resolvedCommentsInstruction = threads.length > 0 ? `
+   - Include \`"resolvedComments"\` with one entry per addressed inline review thread using its exact \`threadId\` and a concise \`reply\` explaining what was fixed:
+     \`{"status":"success","summary":"<summary of review fixes>","testsRun":true,"filesChanged":["..."],"resolvedComments":[{"threadId":"<Thread ID>","reply":"<what was fixed>"}]}\`` : `
+   \`{"status":"success","summary":"<summary of review fixes>","testsRun":true,"filesChanged":["..."]}\``;
   const changedFilesSection = params.changedFiles && params.changedFiles.length > 0 ? `
 ## Changed Files on PR #${params.prNumber}
 \`\`\`
@@ -11137,8 +11158,7 @@ ${agentsSection}
 3. Minimize exploratory tool calls: use the provided Changed Files and Current PR Diff directly.
 4. While iterating, run targeted tests if needed; run the full verification command once before finishing:
    \`${params.verifyCommand}\`
-5. Write a structured JSON file to \`${params.resultFilePath}\` (or output it as your final JSON response):
-   \`{"status":"success","summary":"<summary of review fixes>","testsRun":true,"filesChanged":["..."]}\`
+5. Write a structured JSON file to \`${params.resultFilePath}\` (or output it as your final JSON response):${resolvedCommentsInstruction}
    (or \`"needs_human"\` / \`"failed"\` with \`"reason"\` if blocked).
 
 ## Issue: #${params.issue.number} \u2014 ${params.issue.title}
@@ -15261,12 +15281,17 @@ function extractTypeFromLabels(labels) {
   }
   return "task";
 }
+var ResolvedCommentSchema = external_exports.object({
+  threadId: external_exports.string().min(1),
+  reply: external_exports.string().min(1)
+});
 var AgentResultSchema = external_exports.object({
   status: external_exports.enum(["success", "needs_human", "failed", "retryable"]),
   summary: external_exports.string().min(1),
   reason: external_exports.string().optional(),
   testsRun: external_exports.boolean().optional(),
-  filesChanged: external_exports.array(external_exports.string()).optional()
+  filesChanged: external_exports.array(external_exports.string()).optional(),
+  resolvedComments: external_exports.array(ResolvedCommentSchema).optional()
 });
 
 // src/adapters/agent/runner.ts
@@ -20034,6 +20059,153 @@ var OctokitGitHubAdapter = class {
       (err) => toGitHubError(`Failed to fetch review comments for PR #${prNumber}`, err)
     );
   }
+  getPrReviewThreads(prNumber) {
+    return tryCatch(
+      async () => {
+        const query = `
+          query($owner: String!, $repo: String!, $prNumber: Int!, $cursor: String) {
+            repository(owner: $owner, name: $repo) {
+              pullRequest(number: $prNumber) {
+                reviewThreads(first: 100, after: $cursor) {
+                  pageInfo {
+                    hasNextPage
+                    endCursor
+                  }
+                  nodes {
+                    id
+                    isResolved
+                    isOutdated
+                    path
+                    line
+                    originalLine
+                    comments(first: 50) {
+                      nodes {
+                        id
+                        databaseId
+                        body
+                        author {
+                          login
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        `;
+        const threads = [];
+        let cursor = null;
+        let hasNextPage = true;
+        while (hasNextPage) {
+          const res = await this.octokit.graphql(query, {
+            owner: this.owner,
+            repo: this.repo,
+            prNumber,
+            cursor
+          });
+          const connection = res.repository?.pullRequest?.reviewThreads;
+          if (!connection) break;
+          for (const node of connection.nodes) {
+            threads.push({
+              threadId: node.id,
+              isResolved: node.isResolved,
+              isOutdated: node.isOutdated,
+              path: node.path,
+              line: node.line ?? node.originalLine ?? null,
+              comments: (node.comments?.nodes ?? []).map((c2) => ({
+                id: c2.id,
+                databaseId: c2.databaseId ?? null,
+                author: c2.author?.login ?? "unknown",
+                body: c2.body
+              }))
+            });
+          }
+          hasNextPage = connection.pageInfo.hasNextPage;
+          cursor = connection.pageInfo.endCursor;
+        }
+        return threads;
+      },
+      (err) => toGitHubError(`Failed to fetch review threads for PR #${prNumber}`, err)
+    );
+  }
+  getPrReviewFeedback(prNumber) {
+    return pipe(
+      this.getPrReviewThreads(prNumber),
+      chain2(
+        (allThreads) => tryCatch(
+          async () => {
+            const [reviews, issueComments] = await Promise.all([
+              this.octokit.rest.pulls.listReviews({
+                owner: this.owner,
+                repo: this.repo,
+                pull_number: prNumber
+              }),
+              this.octokit.rest.issues.listComments({
+                owner: this.owner,
+                repo: this.repo,
+                issue_number: prNumber
+              })
+            ]);
+            const generalComments = [];
+            for (const r2 of reviews.data) {
+              if (r2.body && r2.body.trim().length > 0) {
+                generalComments.push(`[Review ${r2.state} by ${r2.user?.login ?? "unknown"}]: ${r2.body}`);
+              }
+            }
+            for (const ic of issueComments.data) {
+              if (ic.user?.type !== "Bot") {
+                generalComments.push(`[PR comment by ${ic.user?.login ?? "unknown"}]: ${ic.body ?? ""}`);
+              }
+            }
+            const unresolvedThreads = allThreads.filter(
+              (t2) => !t2.isResolved && t2.comments.length > 0
+            );
+            return {
+              unresolvedThreads,
+              generalComments
+            };
+          },
+          (err) => toGitHubError(`Failed to fetch review feedback for PR #${prNumber}`, err)
+        )
+      )
+    );
+  }
+  replyToReviewThread(threadId, body) {
+    return tryCatch(
+      async () => {
+        const mutation = `
+          mutation($threadId: ID!, $body: String!) {
+            addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $threadId, body: $body }) {
+              comment {
+                id
+              }
+            }
+          }
+        `;
+        await this.octokit.graphql(mutation, { threadId, body });
+      },
+      (err) => toGitHubError(`Failed to reply to review thread ${threadId}`, err)
+    );
+  }
+  resolveReviewThread(threadId) {
+    return tryCatch(
+      async () => {
+        const mutation = `
+          mutation($threadId: ID!) {
+            resolveReviewThread(input: { threadId: $threadId }) {
+              thread {
+                id
+                isResolved
+              }
+            }
+          }
+        `;
+        await this.octokit.graphql(mutation, { threadId });
+      },
+      (err) => toGitHubError(`Failed to resolve review thread ${threadId}`, err)
+    );
+  }
   checkSetupPrerequisites(opts) {
     return tryCatch(
       async () => {
@@ -20199,6 +20371,40 @@ var OctokitGitHubAdapter = class {
     );
   }
 };
+
+// src/cli/reviewFollowUp.ts
+async function replyAndResolveReviewThreads(params) {
+  const { github, branch, agentResult, threads } = params;
+  const replyByThreadId = /* @__PURE__ */ new Map();
+  for (const item of agentResult.resolvedComments ?? []) {
+    replyByThreadId.set(item.threadId, item.reply);
+  }
+  let repliedCount = 0;
+  let resolvedCount = 0;
+  const warnings = [];
+  for (const thread of threads) {
+    if (thread.isResolved) continue;
+    const specificReply = replyByThreadId.get(thread.threadId);
+    const replyBody = specificReply ? `${specificReply}
+
+_(Fixed on \`${branch}\`)_` : `Applied fix on \`${branch}\`: ${agentResult.summary}`;
+    const replyRes = await github.replyToReviewThread(thread.threadId, replyBody)();
+    if (isLeft2(replyRes)) {
+      const msg = "message" in replyRes.left ? replyRes.left.message : JSON.stringify(replyRes.left);
+      warnings.push(`Failed to reply to review thread ${thread.threadId}: ${msg}`);
+      continue;
+    }
+    repliedCount++;
+    const resolveRes = await github.resolveReviewThread(thread.threadId)();
+    if (isLeft2(resolveRes)) {
+      const msg = "message" in resolveRes.left ? resolveRes.left.message : JSON.stringify(resolveRes.left);
+      warnings.push(`Failed to resolve review thread ${thread.threadId}: ${msg}`);
+      continue;
+    }
+    resolvedCount++;
+  }
+  return { repliedCount, resolvedCount, warnings };
+}
 
 // src/domain/config.ts
 var import_yaml = __toESM(require_dist(), 1);
@@ -24902,7 +25108,13 @@ program2.command("execute").description("Run AI coding agent + verifyCommand wit
   const agentsMd = fs3.existsSync(path3.join(cwd, "AGENTS.md")) ? fs3.readFileSync(path3.join(cwd, "AGENTS.md"), "utf-8") : void 0;
   let prompt;
   if (prNumber) {
-    const reviewComments = await runOrExit(github.getPrReviewComments(prNumber));
+    const feedback = await runOrExit(github.getPrReviewFeedback(prNumber));
+    fs3.mkdirSync(outputDir, { recursive: true });
+    fs3.writeFileSync(
+      path3.join(outputDir, "review-threads.json"),
+      JSON.stringify(feedback.unresolvedThreads, null, 2),
+      "utf-8"
+    );
     let changedFiles;
     let prDiff;
     try {
@@ -24918,7 +25130,8 @@ program2.command("execute").description("Run AI coding agent + verifyCommand wit
     prompt = buildReviewPrompt({
       issue,
       prNumber,
-      reviewComments,
+      reviewComments: feedback.generalComments,
+      reviewThreads: feedback.unresolvedThreads,
       verifyCommand: config.workspace.verifyCommand,
       agentsMd,
       resultFilePath,
@@ -24977,7 +25190,7 @@ program2.command("execute").description("Run AI coding agent + verifyCommand wit
     })
   );
 });
-program2.command("finalize").description("Apply changes.patch, push ai/issue-<N>, open/update PR, and transition issue state").requiredOption("--issue <number>", "Issue number").requiredOption("--result <path>", "Path to result.json").requiredOption("--patch <path>", "Path to changes.patch").option("--pr <number>", "Existing PR number (review follow-up mode)").option("--config <path>", "Path to pr-flow.config.yml", "pr-flow.config.yml").option("--repo <owner/repo>", "GitHub repository").action(async (opts) => {
+program2.command("finalize").description("Apply changes.patch, push ai/issue-<N>, open/update PR, and transition issue state").requiredOption("--issue <number>", "Issue number").requiredOption("--result <path>", "Path to result.json").requiredOption("--patch <path>", "Path to changes.patch").option("--pr <number>", "Existing PR number (review follow-up mode)").option("--review-threads <path>", "Path to review-threads.json (defaults to sibling of result.json)").option("--config <path>", "Path to pr-flow.config.yml", "pr-flow.config.yml").option("--repo <owner/repo>", "GitHub repository").action(async (opts) => {
   const issueNumber = Number(opts.issue);
   const existingPr = opts.pr ? Number(opts.pr) : void 0;
   const config = loadConfigFromDisk(opts.config);
@@ -25087,12 +25300,33 @@ ${agentResult.summary}
       prNumber = createdPr.number;
     }
   } else {
+    const defaultThreadsPath = path3.join(path3.dirname(path3.resolve(opts.result)), "review-threads.json");
+    const threadsPath = opts.reviewThreads ? path3.resolve(opts.reviewThreads) : defaultThreadsPath;
+    let threadsToResolve;
+    if (fs3.existsSync(threadsPath)) {
+      threadsToResolve = JSON.parse(fs3.readFileSync(threadsPath, "utf-8"));
+    } else {
+      const fetchedThreads = await runOrExit(github.getPrReviewThreads(prNumber));
+      threadsToResolve = fetchedThreads.filter((t2) => !t2.isResolved && t2.comments.length > 0);
+    }
+    const followUp = await replyAndResolveReviewThreads({
+      github,
+      branch,
+      agentResult,
+      threads: threadsToResolve
+    });
+    for (const warning of followUp.warnings) {
+      console.error(`[pr-flow] Warning: ${warning}`);
+    }
+    const resolvedNote = followUp.resolvedCount > 0 ? `
+
+Replied to and resolved ${followUp.resolvedCount} review comment thread(s).` : "";
     await runOrExit(
       github.addPrComment(
         prNumber,
         `Applied review fixes on \`${branch}\`.
 
-**Summary:** ${agentResult.summary}`
+**Summary:** ${agentResult.summary}${resolvedNote}`
       )
     );
   }

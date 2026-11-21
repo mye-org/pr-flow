@@ -19,6 +19,8 @@ import type {
   GitHubPort,
   ManagedPrSummary,
   PreflightCheckResult,
+  PrReviewFeedback,
+  PrReviewThread,
   PullRequestSummary,
 } from './types.js';
 
@@ -1027,6 +1029,190 @@ export class OctokitGitHubAdapter implements GitHubPort {
         return collected;
       },
       (err) => toGitHubError(`Failed to fetch review comments for PR #${prNumber}`, err),
+    );
+  }
+
+  getPrReviewThreads(prNumber: number): TE.TaskEither<DomainError, PrReviewThread[]> {
+    return TE.tryCatch(
+      async () => {
+        const query = `
+          query($owner: String!, $repo: String!, $prNumber: Int!, $cursor: String) {
+            repository(owner: $owner, name: $repo) {
+              pullRequest(number: $prNumber) {
+                reviewThreads(first: 100, after: $cursor) {
+                  pageInfo {
+                    hasNextPage
+                    endCursor
+                  }
+                  nodes {
+                    id
+                    isResolved
+                    isOutdated
+                    path
+                    line
+                    originalLine
+                    comments(first: 50) {
+                      nodes {
+                        id
+                        databaseId
+                        body
+                        author {
+                          login
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        `;
+
+        const threads: PrReviewThread[] = [];
+        let cursor: string | null = null;
+        let hasNextPage = true;
+
+        while (hasNextPage) {
+          const res: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  pageInfo: { hasNextPage: boolean; endCursor: string | null };
+                  nodes: Array<{
+                    id: string;
+                    isResolved: boolean;
+                    isOutdated: boolean;
+                    path: string;
+                    line: number | null;
+                    originalLine: number | null;
+                    comments: {
+                      nodes: Array<{
+                        id: string;
+                        databaseId: number | null;
+                        body: string;
+                        author: { login: string } | null;
+                      }>;
+                    };
+                  }>;
+                };
+              } | null;
+            } | null;
+          } = await this.octokit.graphql(query, {
+            owner: this.owner,
+            repo: this.repo,
+            prNumber,
+            cursor,
+          });
+
+          const connection = res.repository?.pullRequest?.reviewThreads;
+          if (!connection) break;
+
+          for (const node of connection.nodes) {
+            threads.push({
+              threadId: node.id,
+              isResolved: node.isResolved,
+              isOutdated: node.isOutdated,
+              path: node.path,
+              line: node.line ?? node.originalLine ?? null,
+              comments: (node.comments?.nodes ?? []).map((c) => ({
+                id: c.id,
+                databaseId: c.databaseId ?? null,
+                author: c.author?.login ?? 'unknown',
+                body: c.body,
+              })),
+            });
+          }
+
+          hasNextPage = connection.pageInfo.hasNextPage;
+          cursor = connection.pageInfo.endCursor;
+        }
+
+        return threads;
+      },
+      (err) => toGitHubError(`Failed to fetch review threads for PR #${prNumber}`, err),
+    );
+  }
+
+  getPrReviewFeedback(prNumber: number): TE.TaskEither<DomainError, PrReviewFeedback> {
+    return pipe(
+      this.getPrReviewThreads(prNumber),
+      TE.chain((allThreads) =>
+        TE.tryCatch(
+          async () => {
+            const [reviews, issueComments] = await Promise.all([
+              this.octokit.rest.pulls.listReviews({
+                owner: this.owner,
+                repo: this.repo,
+                pull_number: prNumber,
+              }),
+              this.octokit.rest.issues.listComments({
+                owner: this.owner,
+                repo: this.repo,
+                issue_number: prNumber,
+              }),
+            ]);
+
+            const generalComments: string[] = [];
+            for (const r of reviews.data) {
+              if (r.body && r.body.trim().length > 0) {
+                generalComments.push(`[Review ${r.state} by ${r.user?.login ?? 'unknown'}]: ${r.body}`);
+              }
+            }
+            for (const ic of issueComments.data) {
+              if (ic.user?.type !== 'Bot') {
+                generalComments.push(`[PR comment by ${ic.user?.login ?? 'unknown'}]: ${ic.body ?? ''}`);
+              }
+            }
+
+            const unresolvedThreads = allThreads.filter(
+              (t) => !t.isResolved && t.comments.length > 0,
+            );
+
+            return {
+              unresolvedThreads,
+              generalComments,
+            };
+          },
+          (err) => toGitHubError(`Failed to fetch review feedback for PR #${prNumber}`, err),
+        ),
+      ),
+    );
+  }
+
+  replyToReviewThread(threadId: string, body: string): TE.TaskEither<DomainError, void> {
+    return TE.tryCatch(
+      async () => {
+        const mutation = `
+          mutation($threadId: ID!, $body: String!) {
+            addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $threadId, body: $body }) {
+              comment {
+                id
+              }
+            }
+          }
+        `;
+        await this.octokit.graphql(mutation, { threadId, body });
+      },
+      (err) => toGitHubError(`Failed to reply to review thread ${threadId}`, err),
+    );
+  }
+
+  resolveReviewThread(threadId: string): TE.TaskEither<DomainError, void> {
+    return TE.tryCatch(
+      async () => {
+        const mutation = `
+          mutation($threadId: ID!) {
+            resolveReviewThread(input: { threadId: $threadId }) {
+              thread {
+                id
+                isResolved
+              }
+            }
+          }
+        `;
+        await this.octokit.graphql(mutation, { threadId });
+      },
+      (err) => toGitHubError(`Failed to resolve review thread ${threadId}`, err),
     );
   }
 

@@ -38,6 +38,10 @@ const mockGithub = (): GitHubPort => ({
   checkSetupPrerequisites: vi.fn(),
   addPrComment: vi.fn(),
   getPrReviewComments: vi.fn(),
+  getPrReviewThreads: vi.fn(),
+  getPrReviewFeedback: vi.fn(),
+  replyToReviewThread: vi.fn(),
+  resolveReviewThread: vi.fn(),
 });
 
 describe('executeEffect', () => {

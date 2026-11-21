@@ -39,6 +39,27 @@ export interface PreflightCheckResult {
   remediation?: string;
 }
 
+export interface PrReviewThreadComment {
+  id: string;
+  databaseId: number | null;
+  author: string;
+  body: string;
+}
+
+export interface PrReviewThread {
+  threadId: string;
+  isResolved: boolean;
+  isOutdated: boolean;
+  path: string;
+  line: number | null;
+  comments: PrReviewThreadComment[];
+}
+
+export interface PrReviewFeedback {
+  unresolvedThreads: PrReviewThread[];
+  generalComments: string[];
+}
+
 export interface GitHubPort {
   getIssue(issueNumber: number): TE.TaskEither<DomainError, IssueNode>;
   listAllIssues(state?: 'open' | 'closed' | 'all'): TE.TaskEither<DomainError, IssueNode[]>;
@@ -77,4 +98,8 @@ export interface GitHubPort {
   }): TE.TaskEither<DomainError, PreflightCheckResult[]>;
   addPrComment(prNumber: number, body: string): TE.TaskEither<DomainError, void>;
   getPrReviewComments(prNumber: number): TE.TaskEither<DomainError, string[]>;
+  getPrReviewThreads(prNumber: number): TE.TaskEither<DomainError, PrReviewThread[]>;
+  getPrReviewFeedback(prNumber: number): TE.TaskEither<DomainError, PrReviewFeedback>;
+  replyToReviewThread(threadId: string, body: string): TE.TaskEither<DomainError, void>;
+  resolveReviewThread(threadId: string): TE.TaskEither<DomainError, void>;
 }

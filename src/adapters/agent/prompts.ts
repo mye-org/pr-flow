@@ -1,4 +1,5 @@
 import type { IssueNode } from '../../domain/issue.js';
+import type { PrReviewThread } from '../github/types.js';
 
 function formatAgentsSection(agentsMd?: string): string {
   return agentsMd ? `\n## Repository Instructions (AGENTS.md)\n${agentsMd.trim()}\n` : '';
@@ -49,6 +50,7 @@ export function buildReviewPrompt(params: {
   issue: IssueNode;
   prNumber: number;
   reviewComments: readonly string[];
+  reviewThreads?: readonly PrReviewThread[];
   verifyCommand: string;
   agentsMd?: string;
   resultFilePath: string;
@@ -57,10 +59,39 @@ export function buildReviewPrompt(params: {
 }): string {
   const agentsSection = formatAgentsSection(params.agentsMd);
 
+  const threads = params.reviewThreads ?? [];
+  const threadsBlock =
+    threads.length > 0
+      ? threads
+          .map((t) => {
+            const loc = t.line !== null ? `${t.path}:${t.line}` : t.path;
+            const msgs = t.comments
+              .map((c) => `  - **${c.author}**: ${c.body}`)
+              .join('\n');
+            return `- **Thread ID:** \`${t.threadId}\` | **Location:** \`${loc}\`\n${msgs}`;
+          })
+          .join('\n\n')
+      : '';
+
+  const generalBlock =
+    params.reviewComments.length > 0 ? params.reviewComments.join('\n\n') : '';
+
+  const feedbackSections: string[] = [];
+  if (threadsBlock) {
+    feedbackSections.push(`### Unresolved Inline Review Threads\n${threadsBlock}`);
+  }
+  if (generalBlock) {
+    feedbackSections.push(`### General PR & Review Comments\n${generalBlock}`);
+  }
   const commentsBlock =
-    params.reviewComments.length > 0
-      ? params.reviewComments.join('\n\n')
+    feedbackSections.length > 0
+      ? feedbackSections.join('\n\n')
       : '(No unresolved review comments found; inspect recent PR feedback.)';
+
+  const resolvedCommentsInstruction =
+    threads.length > 0
+      ? `\n   - Include \`"resolvedComments"\` with one entry per addressed inline review thread using its exact \`threadId\` and a concise \`reply\` explaining what was fixed:\n     \`{"status":"success","summary":"<summary of review fixes>","testsRun":true,"filesChanged":["..."],"resolvedComments":[{"threadId":"<Thread ID>","reply":"<what was fixed>"}]}\``
+      : `\n   \`{"status":"success","summary":"<summary of review fixes>","testsRun":true,"filesChanged":["..."]}\``;
 
   const changedFilesSection =
     params.changedFiles && params.changedFiles.length > 0
@@ -85,8 +116,7 @@ ${agentsSection}
 3. Minimize exploratory tool calls: use the provided Changed Files and Current PR Diff directly.
 4. While iterating, run targeted tests if needed; run the full verification command once before finishing:
    \`${params.verifyCommand}\`
-5. Write a structured JSON file to \`${params.resultFilePath}\` (or output it as your final JSON response):
-   \`{"status":"success","summary":"<summary of review fixes>","testsRun":true,"filesChanged":["..."]}\`
+5. Write a structured JSON file to \`${params.resultFilePath}\` (or output it as your final JSON response):${resolvedCommentsInstruction}
    (or \`"needs_human"\` / \`"failed"\` with \`"reason"\` if blocked).
 
 ## Issue: #${params.issue.number} — ${params.issue.title}

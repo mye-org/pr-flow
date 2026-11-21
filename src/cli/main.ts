@@ -8,7 +8,8 @@ import { pipe } from 'fp-ts/function';
 import { buildImplementPrompt, buildReviewPrompt } from '../adapters/agent/prompts.js';
 import { runAgentExecution } from '../adapters/agent/runner.js';
 import { OctokitGitHubAdapter } from '../adapters/github/client.js';
-import type { GitHubPort } from '../adapters/github/types.js';
+import type { GitHubPort, PrReviewThread } from '../adapters/github/types.js';
+import { replyAndResolveReviewThreads } from './reviewFollowUp.js';
 import { parseConfig, type PrFlowConfig } from '../domain/config.js';
 import { formatGuardError, type DomainError } from '../domain/errors.js';
 import {
@@ -401,7 +402,13 @@ program
 
     let prompt: string;
     if (prNumber) {
-      const reviewComments = await runOrExit(github.getPrReviewComments(prNumber));
+      const feedback = await runOrExit(github.getPrReviewFeedback(prNumber));
+      fs.mkdirSync(outputDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(outputDir, 'review-threads.json'),
+        JSON.stringify(feedback.unresolvedThreads, null, 2),
+        'utf-8',
+      );
       let changedFiles: string[] | undefined;
       let prDiff: string | undefined;
       try {
@@ -423,7 +430,8 @@ program
       prompt = buildReviewPrompt({
         issue,
         prNumber,
-        reviewComments,
+        reviewComments: feedback.generalComments,
+        reviewThreads: feedback.unresolvedThreads,
         verifyCommand: config.workspace.verifyCommand,
         agentsMd,
         resultFilePath,
@@ -503,6 +511,7 @@ program
   .requiredOption('--result <path>', 'Path to result.json')
   .requiredOption('--patch <path>', 'Path to changes.patch')
   .option('--pr <number>', 'Existing PR number (review follow-up mode)')
+  .option('--review-threads <path>', 'Path to review-threads.json (defaults to sibling of result.json)')
   .option('--config <path>', 'Path to pr-flow.config.yml', 'pr-flow.config.yml')
   .option('--repo <owner/repo>', 'GitHub repository')
   .action(async (opts) => {
@@ -624,10 +633,37 @@ program
         prNumber = createdPr.number;
       }
     } else {
+      const defaultThreadsPath = path.join(path.dirname(path.resolve(opts.result)), 'review-threads.json');
+      const threadsPath = opts.reviewThreads ? path.resolve(opts.reviewThreads) : defaultThreadsPath;
+
+      let threadsToResolve: PrReviewThread[];
+      if (fs.existsSync(threadsPath)) {
+        threadsToResolve = JSON.parse(fs.readFileSync(threadsPath, 'utf-8')) as PrReviewThread[];
+      } else {
+        const fetchedThreads = await runOrExit(github.getPrReviewThreads(prNumber));
+        threadsToResolve = fetchedThreads.filter((t) => !t.isResolved && t.comments.length > 0);
+      }
+
+      const followUp = await replyAndResolveReviewThreads({
+        github,
+        branch,
+        agentResult,
+        threads: threadsToResolve,
+      });
+
+      for (const warning of followUp.warnings) {
+        console.error(`[pr-flow] Warning: ${warning}`);
+      }
+
+      const resolvedNote =
+        followUp.resolvedCount > 0
+          ? `\n\nReplied to and resolved ${followUp.resolvedCount} review comment thread(s).`
+          : '';
+
       await runOrExit(
         github.addPrComment(
           prNumber,
-          `Applied review fixes on \`${branch}\`.\n\n**Summary:** ${agentResult.summary}`,
+          `Applied review fixes on \`${branch}\`.\n\n**Summary:** ${agentResult.summary}${resolvedNote}`,
         ),
       );
     }

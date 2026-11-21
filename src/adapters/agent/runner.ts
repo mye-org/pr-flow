@@ -1,4 +1,4 @@
-import { execSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as E from 'fp-ts/lib/Either';
@@ -47,13 +47,23 @@ export function isModelFallbackError(output: string, timedOut: boolean) {
   );
 }
 
-function runShell(
-  command: string,
+type ProcessRunResult = {
+  readonly ok: boolean;
+  readonly status: number;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly output: string;
+  readonly timedOut: boolean;
+};
+
+function runProcess(
+  file: string,
+  args: ReadonlyArray<string>,
   cwd: string,
   env?: NodeJS.ProcessEnv,
   timeoutMs?: number,
 ) {
-  const res = spawnSync('bash', ['-lc', command], {
+  const res = spawnSync(file, [...args], {
     cwd,
     env: { ...process.env, ...env },
     encoding: 'utf-8',
@@ -62,24 +72,37 @@ function runShell(
     killSignal: 'SIGTERM',
   });
   const timedOut = res.error !== undefined && (res.error as NodeJS.ErrnoException).code === 'ETIMEDOUT';
-  const output = `${res.stdout}\n${res.stderr}`.trim();
+  const stdout = res.stdout;
+  const stderr = res.stderr;
+  const combined = `${stdout}\n${stderr}`.trim();
   return {
     ok: res.status === 0 && !timedOut,
     status: res.status ?? 1,
-    output: timedOut ? `${output}\n[pr-flow] Command timed out after ${String(timeoutMs ?? 0)}ms`.trim() : output,
+    stdout,
+    stderr,
+    output: timedOut ? `${combined}\n[pr-flow] Command timed out after ${String(timeoutMs ?? 0)}ms`.trim() : combined,
     timedOut,
   };
 }
 
+function runShell(
+  command: string,
+  cwd: string,
+  env?: NodeJS.ProcessEnv,
+  timeoutMs?: number,
+) {
+  return runProcess('bash', ['-lc', command], cwd, env, timeoutMs);
+}
+
 function resetWorkingTree(cwd: string, outputDir: string) {
   try {
-    execSync('git checkout -- .', { cwd, stdio: 'pipe' });
+    execFileSync('git', ['checkout', '--', '.'], { cwd, stdio: 'pipe' });
     const relOut = path.relative(cwd, outputDir);
-    const excludeArg =
-      relOut && !relOut.startsWith('..') && !path.isAbsolute(relOut)
-        ? `-e ${JSON.stringify(relOut)}`
-        : '';
-    execSync(`git clean -fd ${excludeArg}`, { cwd, stdio: 'pipe' });
+    let cleanArgs: ReadonlyArray<string> = ['clean', '-fd', '-e', '.gemini', '-e', '_pr_flow'];
+    if (relOut && !relOut.startsWith('..') && !path.isAbsolute(relOut)) {
+      cleanArgs = [...cleanArgs, '-e', relOut];
+    }
+    execFileSync('git', [...cleanArgs], { cwd, stdio: 'pipe' });
   } catch {
     // Best-effort cleanup between model fallback attempts
   }
@@ -208,6 +231,45 @@ export function parseGeminiJsonOutput(rawOutput: string) {
   return { response, stats, error };
 }
 
+function extractBalancedJsonObjects(text: string) {
+  let results: ReadonlyArray<string> = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === '{') {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === '}') {
+      if (depth > 0) {
+        depth--;
+        if (depth === 0 && start >= 0) {
+          results = [...results, text.slice(start, i + 1)];
+          start = -1;
+        }
+      }
+    }
+  }
+
+  return [...results].reverse();
+}
+
 export function extractAgentResultFromText(text: string) {
   const trimmed = text.trim();
   if (!trimmed) return null;
@@ -217,11 +279,9 @@ export function extractAgentResultFromText(text: string) {
     .filter((s) => s.length > 0)
     .reverse();
 
-  const lastOpen = trimmed.lastIndexOf('{');
-  const lastClose = trimmed.lastIndexOf('}');
-  const sliced = lastOpen >= 0 && lastClose > lastOpen ? [trimmed.slice(lastOpen, lastClose + 1)] : [];
+  const balanced = extractBalancedJsonObjects(trimmed);
 
-  const candidates: ReadonlyArray<string> = [...fenced, trimmed, ...sliced];
+  const candidates: ReadonlyArray<string> = [...fenced, trimmed, ...balanced];
 
   for (const candidate of candidates) {
     try {
@@ -244,19 +304,18 @@ export function buildGeminiSettings(config: PrFlowConfig) {
   };
 
   if (config.agent.thinkingBudget !== undefined) {
+    const allModels = Array.from(new Set([config.agent.model, ...config.agent.fallbackModels]));
     settings.modelConfigs = {
-      overrides: [
-        {
-          match: { model: config.agent.model },
-          modelConfig: {
-            generateContentConfig: {
-              thinkingConfig: {
-                thinkingBudget: config.agent.thinkingBudget,
-              },
+      overrides: allModels.map((model) => ({
+        match: { model },
+        modelConfig: {
+          generateContentConfig: {
+            thinkingConfig: {
+              thinkingBudget: config.agent.thinkingBudget,
             },
           },
         },
-      ],
+      })),
     };
   }
 
@@ -392,8 +451,7 @@ export function runAgentExecution(params: {
 
   const { parsedResult, lastRun } = withTemporaryGeminiSettings(cwd, config, () => {
     let currentResult: AgentResult | null = null;
-    let currentLastRun: { ok: boolean; status: number; output: string; timedOut: boolean } | null =
-      null;
+    let currentLastRun: ProcessRunResult | null = null;
 
     for (let idx = 0; idx < modelsToTry.length; idx++) {
       const modelName = modelsToTry[idx] ?? 'custom';
@@ -413,26 +471,29 @@ export function runAgentExecution(params: {
         modelsToTry.length - idx,
       );
 
-      const agentCommand =
-        config.agent.provider === 'gemini'
-          ? `npx --yes @google/gemini-cli --model ${modelName} --yolo --output-format json -p "$(cat ${JSON.stringify(promptPath)})"`
-          : (config.agent.command ?? '');
+      const env: NodeJS.ProcessEnv = {
+        PR_FLOW_PROMPT_FILE: promptPath,
+        PR_FLOW_RESULT_FILE: resultPath,
+        GEMINI_CLI_TRUST_WORKSPACE: 'true',
+        NODE_OPTIONS: nodeOpts,
+      };
 
-      const agentRun = runShell(
-        agentCommand,
-        cwd,
-        {
-          PR_FLOW_PROMPT_FILE: promptPath,
-          PR_FLOW_RESULT_FILE: resultPath,
-          GEMINI_CLI_TRUST_WORKSPACE: 'true',
-          NODE_OPTIONS: nodeOpts,
-        },
-        attemptTimeoutMs,
-      );
+      const agentRun =
+        config.agent.provider === 'gemini'
+          ? runProcess(
+              'npx',
+              ['--yes', '@google/gemini-cli', '--model', modelName, '--yolo', '--output-format', 'json', '-p', prompt],
+              cwd,
+              env,
+              attemptTimeoutMs,
+            )
+          : runShell(config.agent.command ?? '', cwd, env, attemptTimeoutMs);
 
       currentLastRun = agentRun;
       const geminiJson =
-        config.agent.provider === 'gemini' ? parseGeminiJsonOutput(agentRun.output) : null;
+        config.agent.provider === 'gemini'
+          ? (parseGeminiJsonOutput(agentRun.stdout) ?? parseGeminiJsonOutput(agentRun.output))
+          : null;
       if (geminiJson?.stats) {
         logTokenUsage(modelName, geminiJson.stats);
       }
@@ -473,6 +534,18 @@ export function runAgentExecution(params: {
     });
   }
 
+  // Preserve explicit agent-reported non-success outcomes (e.g., needs_human) without overwriting them via verifyCommand
+  if (parsedResult && parsedResult.status !== 'success') {
+    fs.writeFileSync(resultPath, JSON.stringify(parsedResult, null, 2), 'utf-8');
+    fs.writeFileSync(patchPath, '', 'utf-8');
+    return E.right<DomainError, AgentRunOutput>({
+      result: parsedResult,
+      patchPath,
+      resultPath,
+      hasChanges: false,
+    });
+  }
+
   // Run deterministic workspace.verifyCommand regardless of agent claims
   const verify = runShell(config.workspace.verifyCommand, cwd);
   if (!verify.ok) {
@@ -483,6 +556,7 @@ export function runAgentExecution(params: {
       testsRun: true,
     };
     fs.writeFileSync(resultPath, JSON.stringify(fallback, null, 2), 'utf-8');
+    fs.writeFileSync(patchPath, '', 'utf-8');
     return E.right<DomainError, AgentRunOutput>({
       result: fallback,
       patchPath,
@@ -500,15 +574,15 @@ export function runAgentExecution(params: {
 
   // Stage untracked files (excluding outputDir and _pr_flow) and export full git diff into changes.patch
   try {
-    execSync('git add -A', { cwd, stdio: 'pipe' });
+    execFileSync('git', ['add', '-A'], { cwd, stdio: 'pipe' });
     const relOut = path.relative(cwd, outputDir);
     if (relOut && !relOut.startsWith('..') && !path.isAbsolute(relOut)) {
-      execSync(`git reset -q -- ${JSON.stringify(relOut)}`, { cwd, stdio: 'pipe' });
+      execFileSync('git', ['reset', '-q', '--', relOut], { cwd, stdio: 'pipe' });
     }
     if (fs.existsSync(path.join(cwd, '_pr_flow'))) {
-      execSync('git reset -q -- _pr_flow', { cwd, stdio: 'pipe' });
+      execFileSync('git', ['reset', '-q', '--', '_pr_flow'], { cwd, stdio: 'pipe' });
     }
-    const diff = execSync('git diff --cached --binary', { cwd, encoding: 'utf-8' });
+    const diff = execFileSync('git', ['diff', '--cached', '--binary'], { cwd, encoding: 'utf-8' });
     fs.writeFileSync(patchPath, diff, 'utf-8');
     return E.right<DomainError, AgentRunOutput>({
       result: finalResult,

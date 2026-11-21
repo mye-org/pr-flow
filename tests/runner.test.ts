@@ -1,3 +1,8 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import * as E from 'fp-ts/lib/Either';
+import { pipe } from 'fp-ts/lib/function';
 import * as O from 'fp-ts/lib/Option';
 import { describe, expect, it } from 'vitest';
 import { buildImplementPrompt, buildReviewPrompt } from '../src/adapters/agent/prompts.js';
@@ -8,6 +13,7 @@ import {
   isModelFallbackError,
   isTransientAgentError,
   parseGeminiJsonOutput,
+  runAgentExecution,
 } from '../src/adapters/agent/runner.js';
 import type { PrFlowConfig } from '../src/domain/config.js';
 import type { IssueNode } from '../src/domain/issue.js';
@@ -89,13 +95,28 @@ describe('extractAgentResultFromText', () => {
     });
   });
 
+  it('extracts unfenced AgentResult with nested resolvedComments objects and braces in strings', () => {
+    expect(
+      extractAgentResultFromText(
+        'All review comments addressed. Final payload: ' +
+          '{"status":"success","summary":"Handled {edge} cases","testsRun":true,' +
+          '"resolvedComments":[{"threadId":"PRRT_1","reply":"Added guard for {empty} input"}]}',
+      ),
+    ).toEqual({
+      status: 'success',
+      summary: 'Handled {edge} cases',
+      testsRun: true,
+      resolvedComments: [{ threadId: 'PRRT_1', reply: 'Added guard for {empty} input' }],
+    });
+  });
+
   it('returns null when JSON does not match AgentResultSchema', () => {
     expect(extractAgentResultFromText('{"foo":"bar"}')).toBeNull();
   });
 });
 
 describe('buildGeminiSettings', () => {
-  it('builds settings with maxSessionTurns, compressionThreshold, and optional thinkingBudget', () => {
+  it('builds settings with maxSessionTurns, compressionThreshold, and thinkingBudget for primary and fallback models', () => {
     expect(
       buildGeminiSettings({
         version: 1,
@@ -106,7 +127,7 @@ describe('buildGeminiSettings', () => {
         agent: {
           provider: 'gemini',
           model: 'gemini-3.8-flash',
-          fallbackModels: [],
+          fallbackModels: ['gemini-3.5-flash-lite'],
           maxRetries: 3,
           timeoutMinutes: 20,
           maxSessionTurns: 20,
@@ -132,9 +153,66 @@ describe('buildGeminiSettings', () => {
               },
             },
           },
+          {
+            match: { model: 'gemini-3.5-flash-lite' },
+            modelConfig: {
+              generateContentConfig: {
+                thinkingConfig: { thinkingBudget: 2048 },
+              },
+            },
+          },
         ],
       },
     });
+  });
+});
+
+describe('runAgentExecution', () => {
+  it('preserves needs_human result without overwriting it when verifyCommand fails', () => {
+    const tmpDir = pipe(path.join(os.tmpdir(), 'pr-flow-runner-'), (prefix: string) =>
+      fs.mkdtempSync(prefix),
+    );
+    try {
+      const res = runAgentExecution({
+        config: {
+          version: 1,
+          wipLimit: 4,
+          baseBranch: 'main',
+          statusFieldName: 'pr-flow-status',
+          workspace: { setupCommand: '', verifyCommand: 'exit 1' },
+          agent: {
+            provider: 'custom',
+            model: 'custom',
+            command:
+              'printf \'{"status":"needs_human","summary":"Blocked","reason":"Need API spec","testsRun":false}\' > "$PR_FLOW_RESULT_FILE"',
+            fallbackModels: [],
+            maxRetries: 1,
+            timeoutMinutes: 5,
+            maxSessionTurns: 10,
+            compressionThreshold: 0.2,
+          },
+          triggers: {
+            reviewMode: 'changes_requested',
+            autoPickup: true,
+            autoMergeOnApprove: true,
+            mergeMethod: 'squash',
+          },
+        },
+        prompt: 'Implement feature',
+        cwd: tmpDir,
+        outputDir: path.join(tmpDir, 'out'),
+      });
+
+      expect(E.isRight(res)).toBe(true);
+      if (E.isRight(res)) {
+        expect(res.right.result.status).toBe('needs_human');
+        expect(res.right.result.reason).toBe('Need API spec');
+        expect(res.right.hasChanges).toBe(false);
+        expect(fs.existsSync(res.right.patchPath)).toBe(true);
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -17,7 +17,7 @@
 
 1. In your target repository, run:
    ```bash
-   GITHUB_TOKEN=$(gh auth token) npx github:mingqianye/pr-flow#v1 init \
+   GITHUB_TOKEN=$(gh auth token) npx --yes github:mye-org/pr-flow#v1 init \
      --setup-command "npm ci" \
      --verify-command "npm test" \
      --sync-labels \

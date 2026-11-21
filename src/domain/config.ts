@@ -28,7 +28,7 @@ export const PrFlowConfigSchema = z.object({
       compressionThreshold: z.number().min(0.05).max(0.95).default(0.2),
       thinkingBudget: z.number().int().min(0).optional(),
     })
-    .default({}),
+    .prefault({}),
   triggers: z
     .object({
       reviewMode: z.enum(['changes_requested', 'comment', 'both']).default('changes_requested'),
@@ -36,7 +36,7 @@ export const PrFlowConfigSchema = z.object({
       autoMergeOnApprove: z.boolean().default(true),
       mergeMethod: z.enum(['squash', 'merge', 'rebase']).default('squash'),
     })
-    .default({}),
+    .prefault({}),
 });
 
 export type PrFlowConfig = z.infer<typeof PrFlowConfigSchema>;
@@ -52,9 +52,7 @@ const validateCustomAgentCommand = (config: PrFlowConfig) =>
     .with(false, () => E.right(config))
     .exhaustive();
 
-const validateConfigSchema = (
-  parsed: z.SafeParseReturnType<z.input<typeof PrFlowConfigSchema>, PrFlowConfig>,
-) =>
+const validateConfigSchema = (parsed: z.ZodSafeParseResult<PrFlowConfig>) =>
   match(parsed)
     .with({ success: true }, ({ data }) => validateCustomAgentCommand(data))
     .with({ success: false }, ({ error }) =>

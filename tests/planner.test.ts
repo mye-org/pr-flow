@@ -18,12 +18,10 @@ epic:
   id: epic-auth
   title: "Authentication System"
   body: "End-to-end auth"
-  priority: p1
 issues:
   - id: story-core
     title: "Core Token Service"
     type: story
-    priority: p1
   - id: task-jwt
     title: "Implement JWT signing"
     type: task
@@ -74,6 +72,52 @@ issues:
     }
   });
 
+  it('rejects self-parenting and parentId/blockedBy cycles', () => {
+    const selfParent = parsePlanManifest(`version: 1
+issues:
+  - id: a
+    title: A
+    type: story
+    parentId: a
+`);
+    expect(E.isRight(selfParent)).toBe(true);
+    if (E.isRight(selfParent)) {
+      expect(pipe(selfParent.right, validatePlanDag, E.isLeft)).toBe(true);
+    }
+
+    const parentCycle = parsePlanManifest(`version: 1
+issues:
+  - id: a
+    title: A
+    type: story
+    parentId: b
+  - id: b
+    title: B
+    type: story
+    parentId: a
+`);
+    expect(E.isRight(parentCycle)).toBe(true);
+    if (E.isRight(parentCycle)) {
+      expect(pipe(parentCycle.right, validatePlanDag, E.isLeft)).toBe(true);
+    }
+
+    const crossCycle = parsePlanManifest(`version: 1
+issues:
+  - id: story-a
+    title: Story A
+    type: story
+    blockedBy: [task-b]
+  - id: task-b
+    title: Task B
+    type: task
+    parentId: story-a
+`);
+    expect(E.isRight(crossCycle)).toBe(true);
+    if (E.isRight(crossCycle)) {
+      expect(pipe(crossCycle.right, validatePlanDag, E.isLeft)).toBe(true);
+    }
+  });
+
   it('materializes issues, sub-issues, and blocked_by links via GitHubPort', async () => {
     const parsed = parsePlanManifest(VALID_PLAN_YAML);
     expect(E.isRight(parsed)).toBe(true);
@@ -108,7 +152,12 @@ issues:
     expect(E.isRight(res)).toBe(true);
     if (E.isRight(res)) {
       expect(Object.keys(res.right.createdIssues)).toHaveLength(4);
-      expect(statusUpdates).toHaveLength(4);
+      expect(statusUpdates).toEqual([
+        [10, 'backlog'],
+        [11, 'backlog'],
+        [12, 'ready'],
+        [13, 'blocked_dep'],
+      ]);
       expect(subLinks).toHaveLength(3);
       expect(depLinks).toHaveLength(1);
       expect(createdBodies).toHaveLength(4);

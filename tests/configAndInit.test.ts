@@ -92,13 +92,15 @@ describe('generateInitFiles', () => {
       expect(hasFile('.agents/skills/pr-flow/SKILL.md')).toBe(true);
       expect(hasFile('.github/workflows/pr-flow-implement.yml')).toBe(true);
       expect(readFile('.github/workflows/pr-flow-implement.yml')).toContain('field_added');
+      expect(readFile('.github/workflows/pr-flow-sync.yml')).toContain('field_added');
+      expect(readFile('.github/workflows/pr-flow-sync.yml')).toContain('field_removed');
       const generatedSkill = readFile('.agents/skills/pr-flow/SKILL.md');
       expect(generatedSkill).toContain('Parent rollup precedence');
       expect(generatedSkill).toContain('status set --issue');
 
       const second = generateInitFiles({
         targetDir: tmpDir,
-        prFlowOwner: 'mingqianye',
+        prFlowOwner: 'mye-org',
         prFlowRef: 'v1',
         baseBranch: 'main',
         wipLimit: 4,
@@ -109,6 +111,22 @@ describe('generateInitFiles', () => {
       });
       expect(second.written).toHaveLength(0);
       expect(second.skipped).toHaveLength(7);
+
+      generateInitFiles({
+        targetDir: tmpDir,
+        prFlowOwner: 'mye-org',
+        prFlowRef: 'v1',
+        baseBranch: 'main',
+        wipLimit: 4,
+        setupCommand: 'npm ci',
+        verifyCommand: 'npm run verify',
+        reviewMode: 'both',
+        force: true,
+      });
+      const reviewYml = readFile('.github/workflows/pr-flow-review.yml');
+      expect(reviewYml).toContain('issue_comment:');
+      expect(reviewYml).toContain("review.state == 'commented'");
+      expect(reviewYml).toContain("review.state == 'changes_requested'");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -437,6 +455,107 @@ describe('OctokitGitHubAdapter.getPrReviewComments', () => {
         '[Review CHANGES_REQUESTED by reviewer]: New review feedback',
         '[Inline comment on src/new.ts:22 by reviewer]: Please rename this',
         '[PR comment by reviewer]: Fresh PR comment',
+      ]);
+    }
+  });
+
+  it('filters out pre-fix reviews, approved reviews, and resolved threads in getPrReviewFeedback', async () => {
+    const adapter = new OctokitGitHubAdapter({
+      token: 'test-token',
+      owner: 'mye-org',
+      repo: 'pr-flow-demo',
+    });
+    const octokit = getOctokit(adapter);
+
+    vi.spyOn(octokit, 'graphql').mockResolvedValueOnce({
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              {
+                id: 'PRRT_resolved',
+                isResolved: true,
+                isOutdated: true,
+                path: 'src/old.ts',
+                line: 10,
+                originalLine: 10,
+                comments: {
+                  nodes: [
+                    { id: 'c1', databaseId: 1, body: 'Old resolved', author: { login: 'reviewer' } },
+                  ],
+                },
+              },
+              {
+                id: 'PRRT_open',
+                isResolved: false,
+                isOutdated: false,
+                path: 'src/new.ts',
+                line: 22,
+                originalLine: 22,
+                comments: {
+                  nodes: [
+                    { id: 'c2', databaseId: 2, body: 'Fix null check', author: { login: 'reviewer' } },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    vi.spyOn(octokit.rest.pulls, 'listReviews').mockResolvedValueOnce({
+      data: [
+        {
+          state: 'CHANGES_REQUESTED',
+          body: 'Stale review',
+          submitted_at: '2026-11-20T10:00:00Z',
+          user: { login: 'reviewer' },
+        },
+        {
+          state: 'APPROVED',
+          body: 'Looks good',
+          submitted_at: '2026-11-20T12:00:00Z',
+          user: { login: 'reviewer' },
+        },
+        {
+          state: 'CHANGES_REQUESTED',
+          body: 'Fresh review',
+          submitted_at: '2026-11-20T13:00:00Z',
+          user: { login: 'reviewer' },
+        },
+      ],
+    });
+
+    vi.spyOn(octokit.rest.issues, 'listComments').mockResolvedValueOnce({
+      data: [
+        {
+          user: { type: 'User', login: 'reviewer' },
+          body: 'Stale comment',
+          created_at: '2026-11-20T10:30:00Z',
+        },
+        {
+          user: { type: 'Bot', login: 'github-actions[bot]' },
+          body: 'Applied review fixes on `ai/issue-1`.\n\n**Summary:** fixed',
+          created_at: '2026-11-20T11:00:00Z',
+        },
+        {
+          user: { type: 'User', login: 'reviewer' },
+          body: 'Fresh comment',
+          created_at: '2026-11-20T13:05:00Z',
+        },
+      ],
+    });
+
+    const res = await adapter.getPrReviewFeedback(99)();
+    expect(E.isRight(res)).toBe(true);
+    if (E.isRight(res)) {
+      expect(res.right.unresolvedThreads).toHaveLength(1);
+      expect(res.right.unresolvedThreads[0]?.threadId).toBe('PRRT_open');
+      expect(res.right.generalComments).toEqual([
+        '[Review CHANGES_REQUESTED by reviewer]: Fresh review',
+        '[PR comment by reviewer]: Fresh comment',
       ]);
     }
   });

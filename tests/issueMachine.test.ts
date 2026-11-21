@@ -247,4 +247,54 @@ describe('issueMachine transitions', () => {
       to: 'needs_human',
     });
   });
+
+  it('transitions review_pending -> needs_human on NEEDS_HUMAN_DETECTED', () => {
+    const res = transitionIssue(makeIssue({ status: 'review_pending' }), {
+      type: 'NEEDS_HUMAN_DETECTED',
+      reason: isoMessage.wrap('Ambiguous review comment'),
+    });
+    expect(res.changeKind).toBe('changed');
+    expect(res.nextStatus).toBe('needs_human');
+    expect(res.effects[0]).toEqual({
+      type: 'SET_STATUS_FIELD',
+      issueNumber: isoIssueNumber.wrap(42),
+      from: O.some('review_pending'),
+      to: 'needs_human',
+    });
+    expect(
+      pipe(
+        res.effects,
+        RA.some((e) => e.type === 'ADD_COMMENT'),
+      ),
+    ).toBe(true);
+  });
+
+  it('transitions in_progress and needs_human -> fixed on PR_MERGED', () => {
+    const fromInProgress = transitionIssue(makeIssue({ status: 'in_progress' }), {
+      type: 'PR_MERGED',
+      prNumber: isoPrNumber.wrap(99),
+    });
+    expect(fromInProgress.nextStatus).toBe('fixed');
+    expect(fromInProgress.effects).toEqual([
+      {
+        type: 'SET_STATUS_FIELD',
+        issueNumber: isoIssueNumber.wrap(42),
+        from: O.some('in_progress'),
+        to: 'fixed',
+      },
+      { type: 'CLOSE_ISSUE', issueNumber: isoIssueNumber.wrap(42) },
+    ]);
+
+    const fromNeedsHuman = transitionIssue(makeIssue({ status: 'needs_human' }), {
+      type: 'PR_MERGED',
+      prNumber: isoPrNumber.wrap(99),
+    });
+    expect(fromNeedsHuman.nextStatus).toBe('fixed');
+    expect(fromNeedsHuman.effects[0]).toEqual({
+      type: 'SET_STATUS_FIELD',
+      issueNumber: isoIssueNumber.wrap(42),
+      from: O.some('needs_human'),
+      to: 'fixed',
+    });
+  });
 });

@@ -113,9 +113,20 @@ jobs:
       GEMINI_API_KEY: \${{ secrets.GEMINI_API_KEY }}
 `;
 
-  const reviewWorkflow = `name: pr-flow Review Follow-up
-
-on:
+  const includeIssueComments = opts.reviewMode === 'comment' || opts.reviewMode === 'both';
+  const reviewTriggerBlock = includeIssueComments
+    ? `on:
+  pull_request_review:
+    types: [submitted]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to address review feedback on'
+        required: true
+        type: number`
+    : `on:
   pull_request_review:
     types: [submitted]
   workflow_dispatch:
@@ -123,10 +134,50 @@ on:
       pr_number:
         description: 'PR number to address review feedback on'
         required: true
-        type: number
+        type: number`;
+
+  const reviewJobCondition = (() => {
+    if (opts.reviewMode === 'changes_requested') {
+      return `      github.event_name == 'workflow_dispatch' ||
+      (github.event.review.state == 'changes_requested' &&
+      contains(github.event.pull_request.labels.*.name, 'ai-managed'))`;
+    }
+    if (opts.reviewMode === 'comment') {
+      return `      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request_review' &&
+      github.event.review.state == 'commented' &&
+      github.event.review.user.type != 'Bot' &&
+      contains(github.event.pull_request.labels.*.name, 'ai-managed')) ||
+      (github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      github.event.comment.user.type != 'Bot' &&
+      contains(github.event.issue.labels.*.name, 'ai-managed'))`;
+    }
+    return `      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request_review' &&
+      (github.event.review.state == 'changes_requested' ||
+      (github.event.review.state == 'commented' && github.event.review.user.type != 'Bot')) &&
+      contains(github.event.pull_request.labels.*.name, 'ai-managed')) ||
+      (github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      github.event.comment.user.type != 'Bot' &&
+      contains(github.event.issue.labels.*.name, 'ai-managed'))`;
+  })();
+
+  const reviewPrExpr = includeIssueComments
+    ? `\${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.pr_number) || github.event.pull_request.number || github.event.issue.number }}`
+    : `\${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.pr_number) || github.event.pull_request.number }}`;
+
+  const reviewConcurrencyExpr = includeIssueComments
+    ? `pr-flow-review-\${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}`
+    : `pr-flow-review-\${{ github.event.pull_request.number || inputs.pr_number }}`;
+
+  const reviewWorkflow = `name: pr-flow Review Follow-up
+
+${reviewTriggerBlock}
 
 concurrency:
-  group: pr-flow-review-\${{ github.event.pull_request.number || inputs.pr_number }}
+  group: ${reviewConcurrencyExpr}
   cancel-in-progress: false
 
 permissions:
@@ -137,12 +188,10 @@ permissions:
 jobs:
   review:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.review.state == 'changes_requested' &&
-      contains(github.event.pull_request.labels.*.name, 'ai-managed'))
+${reviewJobCondition}
     uses: ${usesPrefix}/reusable-review.yml@${opts.prFlowRef}
     with:
-      pr_number: \${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.pr_number) || github.event.pull_request.number }}
+      pr_number: ${reviewPrExpr}
     secrets:
       GEMINI_API_KEY: \${{ secrets.GEMINI_API_KEY }}
 
@@ -160,7 +209,7 @@ jobs:
 
 on:
   issues:
-    types: [closed, reopened, labeled, unlabeled]
+    types: [closed, reopened, field_added, field_removed]
   pull_request:
     types: [closed]
 

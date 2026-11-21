@@ -82,16 +82,35 @@ const nodeLabels = (node: PlanIssueNode) =>
     ]),
   );
 
+const collectParentIds = (nodes: ReadonlyArray<PlanIssueNode>) =>
+  new Set(
+    pipe(
+      nodes,
+      RA.filterMap((n) => O.fromNullable(n.parentId)),
+    ),
+  );
+
+const initialStatusForNode = (
+  node: PlanIssueNode,
+  parentIds: ReadonlySet<string>,
+) => {
+  if (node.type === 'epic' || parentIds.has(node.id)) {
+    return 'backlog' as const;
+  }
+  return node.blockedBy.length > 0 ? ('blocked_dep' as const) : ('ready' as const);
+};
+
 const createSingleNode = (
   node: PlanIssueNode,
   idToNumber: ReadonlyMap<string, number>,
+  parentIds: ReadonlySet<string>,
   github: GitHubPort,
 ) =>
   pipe(
     github.createIssue({ title: node.title, body: formatIssueBody(node.body), labels: nodeLabels(node) }),
     TE.chain((created) =>
       pipe(
-        github.setIssueStatus(created.number, node.blockedBy.length > 0 ? 'blocked_dep' : 'ready'),
+        github.setIssueStatus(created.number, initialStatusForNode(node, parentIds)),
         TE.map(() => new Map(idToNumber).set(node.id, created.number)),
       ),
     ),
@@ -102,12 +121,14 @@ const createAllNodes = (
   initialMap: ReadonlyMap<string, number>,
   github: GitHubPort,
 ) =>
-  pipe(
-    sorted,
-    RA.reduce(TE.right<DomainError, ReadonlyMap<string, number>>(initialMap), (acc, node) =>
-      pipe(
-        acc,
-        TE.chain((map) => createSingleNode(node, map, github)),
+  pipe(collectParentIds(sorted), (parentIds) =>
+    pipe(
+      sorted,
+      RA.reduce(TE.right<DomainError, ReadonlyMap<string, number>>(initialMap), (acc, node) =>
+        pipe(
+          acc,
+          TE.chain((map) => createSingleNode(node, map, parentIds, github)),
+        ),
       ),
     ),
   );

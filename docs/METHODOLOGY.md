@@ -23,8 +23,8 @@ Container `pr-flow-status` is computed deterministically from child sub-issues:
 ## 2. WIP Limit & Serialization
 
 - Default `wipLimit: 4` (configurable in `pr-flow.config.yml`).
-- Counts **only `in-progress`** issues. `review-pending` is uncapped so human code review never stalls automated pickup of unblocked work.
-- All state transitions are serialized via GitHub Actions `concurrency: { group: fsm-dispatcher, cancel-in-progress: false }`.
+- Counts **only executable leaf `in-progress`** issues (container rollups and `review-pending` are uncapped so parent rollups and human code review never stall automated pickup of unblocked work).
+- `claim` jobs are serialized via GitHub Actions `concurrency: { group: fsm-claim, cancel-in-progress: false }` to prevent WIP-limit race conditions while allowing `execute` jobs to run in parallel (`sync` uses `fsm-sync`; `reconcile` uses `fsm-dispatcher`).
 
 ## 3. Native GitHub Dependencies
 

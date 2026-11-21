@@ -36,6 +36,7 @@ function createMockGithub(overrides: Partial<GitHubPort> = {}) {
     listBlockedBy: vi.fn(),
     listBlocking: vi.fn(),
     addBlockedBy: vi.fn(),
+    getPullRequest: vi.fn(),
     listOpenPrsForIssue: vi.fn(),
     listOpenAiManagedPrs: vi.fn(),
     createPullRequest: vi.fn(),

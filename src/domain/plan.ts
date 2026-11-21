@@ -35,9 +35,7 @@ export const PlanManifestSchema = z.object({
 export type PlanIssueNode = z.infer<typeof PlanIssueNodeSchema>;
 export type PlanManifest = z.infer<typeof PlanManifestSchema>;
 
-const validatePlanSchema = (
-  parsed: z.SafeParseReturnType<z.input<typeof PlanManifestSchema>, PlanManifest>,
-) =>
+const validatePlanSchema = (parsed: z.ZodSafeParseResult<PlanManifest>) =>
   match(parsed)
     .with({ success: true }, ({ data }) => E.right(data))
     .with({ success: false }, ({ error }) =>

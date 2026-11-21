@@ -31,7 +31,7 @@
     "ts-pattern": "^5.5.0",
     "xstate": "^5.19.0",
     "yaml": "^2.6.0",
-    "zod": "^3.24.1"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@mye-org/eslint-plugin-strict-fp": "git+https://github.com/mye-org/very-strict-ts-linter.git",
@@ -40,7 +40,7 @@
     "jiti": "^2.7.0",
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "vitest": "^5.1.1"
   },
   "engines": {
     "node": ">=20"

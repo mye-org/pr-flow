@@ -17,16 +17,28 @@ The issue lifecycle is modeled as a deterministic **XState v5** machine (`src/ma
 ## Transitions
 
 ```text
-backlog ──(DEPS_BLOCKED)──────────────▶ blocked_dep
-backlog ──(DEPS_RESOLVED)─────────────▶ ready
-blocked_dep ──(DEPS_RESOLVED)─────────▶ ready
-ready ──(PICKUP_REQUESTED [guards])───▶ in_progress
-in_progress ──(EXECUTION_SUCCEEDED)───▶ review_pending
-in_progress ──(EXECUTION_FAILED)──────▶ needs_human
-in_progress ──(NEEDS_HUMAN_DETECTED)──▶ needs_human
-review_pending ──(REVIEW_CHANGES_REQ)─▶ in_progress
-review_pending ──(PR_MERGED)──────────▶ fixed
-needs_human ──(HUMAN_REQUEUED)────────▶ ready
+backlog ──(DEPS_BLOCKED)─────────────────────────────▶ blocked_dep
+backlog ──(DEPS_RESOLVED)────────────────────────────▶ ready
+blocked_dep ──(DEPS_RESOLVED)────────────────────────▶ ready
+ready ──(DEPS_BLOCKED)───────────────────────────────▶ blocked_dep
+ready ──(PICKUP_REQUESTED [canPickup])───────────────▶ in_progress
+ready ──(PR_MERGED)──────────────────────────────────▶ fixed
+in_progress ──(EXECUTION_SUCCEEDED)──────────────────▶ review_pending
+in_progress ──(TRANSIENT_EXECUTION_FAILED [canRetry])▶ ready
+in_progress ──(TRANSIENT_EXECUTION_FAILED [exhausted])▶ needs_human
+in_progress ──(EXECUTION_FAILED)─────────────────────▶ needs_human
+in_progress ──(NEEDS_HUMAN_DETECTED)─────────────────▶ needs_human
+in_progress ──(PR_MERGED)────────────────────────────▶ fixed
+review_pending ──(REVIEW_CHANGES_REQUESTED)──────────▶ in_progress
+review_pending ──(TRANSIENT_EXECUTION_FAILED [canRetry])▶ review_pending
+review_pending ──(TRANSIENT_EXECUTION_FAILED [exhausted])▶ needs_human
+review_pending ──(EXECUTION_FAILED)──────────────────▶ needs_human
+review_pending ──(NEEDS_HUMAN_DETECTED)──────────────▶ needs_human
+review_pending ──(PR_MERGED)─────────────────────────▶ fixed
+needs_human ──(HUMAN_REQUEUED)───────────────────────▶ ready
+needs_human ──(DEPS_BLOCKED)─────────────────────────▶ blocked_dep
+needs_human ──(PR_MERGED)────────────────────────────▶ fixed
+fixed ──(HUMAN_REQUEUED)─────────────────────────────▶ ready (reopens issue)
 ```
 
 ## Pure Guards (`checkPickupEligibility`)

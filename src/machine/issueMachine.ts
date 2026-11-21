@@ -128,6 +128,13 @@ export const issueMachine = setup({
           target: 'in_progress',
           actions: { type: 'emitStatusFieldSet', params: { from: 'ready', to: 'in_progress' } },
         },
+        PR_MERGED: {
+          target: 'fixed',
+          actions: [
+            { type: 'emitStatusFieldSet', params: { from: 'ready', to: 'fixed' } },
+            { type: 'emitCloseIssue' },
+          ],
+        },
       },
     },
     in_progress: {
@@ -210,6 +217,13 @@ export const issueMachine = setup({
             })),
           ],
         },
+        PR_MERGED: {
+          target: 'fixed',
+          actions: [
+            { type: 'emitStatusFieldSet', params: { from: 'in_progress', to: 'fixed' } },
+            { type: 'emitCloseIssue' },
+          ],
+        },
       },
     },
     review_pending: {
@@ -270,6 +284,21 @@ export const issueMachine = setup({
             })),
           ],
         },
+        NEEDS_HUMAN_DETECTED: {
+          target: 'needs_human',
+          actions: [
+            { type: 'emitStatusFieldSet', params: { from: 'review_pending', to: 'needs_human' } },
+            assign(({ context, event }) => ({
+              effects: appendEffect(context.effects, {
+                type: 'ADD_COMMENT',
+                issueNumber: context.issueNumber,
+                body: isoBody.wrap(
+                  `Review follow-up requested human intervention.\n\n**Reason:** ${isoMessage.unwrap(event.reason)}`,
+                ),
+              }),
+            })),
+          ],
+        },
       },
     },
     needs_human: {
@@ -281,6 +310,13 @@ export const issueMachine = setup({
         DEPS_BLOCKED: {
           target: 'blocked_dep',
           actions: { type: 'emitStatusFieldSet', params: { from: 'needs_human', to: 'blocked_dep' } },
+        },
+        PR_MERGED: {
+          target: 'fixed',
+          actions: [
+            { type: 'emitStatusFieldSet', params: { from: 'needs_human', to: 'fixed' } },
+            { type: 'emitCloseIssue' },
+          ],
         },
       },
     },

@@ -1,4 +1,3 @@
-import type { IssueStatus } from './issue.js';
 import type {
   BranchName,
   Count,
@@ -41,11 +40,5 @@ export type IssueEvent =
       readonly prNumber: PrNumber;
       readonly reviewer: ReviewerName;
     }
-  | {
-      readonly type: 'REVIEW_FIX_SUCCEEDED';
-      readonly prNumber: PrNumber;
-      readonly summary: Message;
-    }
   | { readonly type: 'PR_MERGED'; readonly prNumber: PrNumber }
-  | { readonly type: 'HUMAN_REQUEUED' }
-  | { readonly type: 'ROLLUP_UPDATED'; readonly targetStatus: IssueStatus };
+  | { readonly type: 'HUMAN_REQUEUED' };

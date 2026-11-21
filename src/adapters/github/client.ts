@@ -121,6 +121,48 @@ function mapRawIssue(
   };
 }
 
+async function paginateRestPages<T>(
+  fetchPage: (page: number) => Promise<ReadonlyArray<T>>,
+  perPage = 100,
+) {
+  let all: ReadonlyArray<T> = [];
+  let page = 1;
+  for (;;) {
+    const items = await fetchPage(page);
+    all = [...all, ...items];
+    if (items.length < perPage) {
+      break;
+    }
+    page++;
+  }
+  return all;
+}
+
+type IssueCommentLike = {
+  readonly user?: { readonly type?: string | null; readonly login?: string | null } | null;
+  readonly body?: string | null;
+  readonly created_at?: string | null;
+};
+
+function findLastFixCommentTimestamp(issueComments: ReadonlyArray<IssueCommentLike>) {
+  let lastFixAtMs = 0;
+  let lastFixIso: string | null = null;
+  for (const ic of issueComments) {
+    if (
+      ic.user?.type === 'Bot' &&
+      (ic.body ?? '').includes('Applied review fixes on `') &&
+      ic.created_at
+    ) {
+      const ts = Date.parse(ic.created_at);
+      if (!Number.isNaN(ts) && ts > lastFixAtMs) {
+        lastFixAtMs = ts;
+        lastFixIso = ic.created_at;
+      }
+    }
+  }
+  return { ms: lastFixAtMs, iso: lastFixIso };
+}
+
 export class OctokitGitHubAdapter implements GitHubPort {
   private readonly octokit: Octokit;
   private readonly owner: string;
@@ -684,16 +726,19 @@ export class OctokitGitHubAdapter implements GitHubPort {
     return TE.tryCatch(
       async () => {
         try {
-          const res = await this.octokit.request(
-            'GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues',
-            {
-              owner: this.owner,
-              repo: this.repo,
-              issue_number: issueNumber,
-              per_page: 100,
-            },
-          );
-          const data = res.data as ReadonlyArray<{ number: number }>;
+          const data = await paginateRestPages(async (page) => {
+            const res = await this.octokit.request(
+              'GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues',
+              {
+                owner: this.owner,
+                repo: this.repo,
+                issue_number: issueNumber,
+                per_page: 100,
+                page,
+              },
+            );
+            return res.data;
+          });
           return data.map((d) => d.number);
         } catch (err: unknown) {
           if (typeof err === 'object' && err !== null && 'status' in err && (err as { status: number }).status === 404) {
@@ -736,16 +781,19 @@ export class OctokitGitHubAdapter implements GitHubPort {
     return TE.tryCatch(
       async () => {
         try {
-          const res = await this.octokit.request(
-            'GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by',
-            {
-              owner: this.owner,
-              repo: this.repo,
-              issue_number: issueNumber,
-              per_page: 100,
-            },
-          );
-          const data = res.data as ReadonlyArray<RawGitHubIssue>;
+          const data = await paginateRestPages(async (page) => {
+            const res = await this.octokit.request(
+              'GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by',
+              {
+                owner: this.owner,
+                repo: this.repo,
+                issue_number: issueNumber,
+                per_page: 100,
+                page,
+              },
+            );
+            return res.data as ReadonlyArray<RawGitHubIssue>;
+          });
           return data.map((d) => mapRawIssue(d));
         } catch (err: unknown) {
           if (typeof err === 'object' && err !== null && 'status' in err && (err as { status: number }).status === 404) {
@@ -762,16 +810,19 @@ export class OctokitGitHubAdapter implements GitHubPort {
     return TE.tryCatch(
       async () => {
         try {
-          const res = await this.octokit.request(
-            'GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocking',
-            {
-              owner: this.owner,
-              repo: this.repo,
-              issue_number: issueNumber,
-              per_page: 100,
-            },
-          );
-          const data = res.data as ReadonlyArray<{ number: number }>;
+          const data = await paginateRestPages(async (page) => {
+            const res = await this.octokit.request(
+              'GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocking',
+              {
+                owner: this.owner,
+                repo: this.repo,
+                issue_number: issueNumber,
+                per_page: 100,
+                page,
+              },
+            );
+            return res.data as ReadonlyArray<{ number: number }>;
+          });
           return data.map((d) => d.number);
         } catch (err: unknown) {
           if (typeof err === 'object' && err !== null && 'status' in err && (err as { status: number }).status === 404) {
@@ -807,6 +858,26 @@ export class OctokitGitHubAdapter implements GitHubPort {
           `Failed to add blocked_by #${String(blockerNumber)} on #${String(issueNumber)}`,
           err,
         ),
+    );
+  }
+
+  getPullRequest(prNumber: number) {
+    return TE.tryCatch(
+      async () => {
+        const res = await this.octokit.rest.pulls.get({
+          owner: this.owner,
+          repo: this.repo,
+          pull_number: prNumber,
+        });
+        return {
+          number: res.data.number,
+          url: res.data.html_url,
+          headRef: res.data.head.ref,
+          state: res.data.state === 'closed' ? ('closed' as const) : ('open' as const),
+          merged: res.data.merged,
+        };
+      },
+      (err) => toGitHubError(`Failed to fetch PR #${String(prNumber)}`, err),
     );
   }
 
@@ -848,15 +919,36 @@ export class OctokitGitHubAdapter implements GitHubPort {
           if (!hasLabel || !match) continue;
           const issueNumber = Number(match[1]);
 
-          const reviews = await this.octokit.rest.pulls.listReviews({
-            owner: this.owner,
-            repo: this.repo,
-            pull_number: pr.number,
-          });
-          const decisive = reviews.data.filter(
+          const [reviews, issueComments] = await Promise.all([
+            paginateRestPages(async (page) => {
+              const res = await this.octokit.rest.pulls.listReviews({
+                owner: this.owner,
+                repo: this.repo,
+                pull_number: pr.number,
+                per_page: 100,
+                page,
+              });
+              return res.data;
+            }),
+            paginateRestPages(async (page) => {
+              const res = await this.octokit.rest.issues.listComments({
+                owner: this.owner,
+                repo: this.repo,
+                issue_number: pr.number,
+                per_page: 100,
+                page,
+              });
+              return res.data;
+            }),
+          ]);
+
+          const decisive = reviews.filter(
             (r) => r.state === 'CHANGES_REQUESTED' || r.state === 'APPROVED' || r.state === 'DISMISSED',
           );
-          const latestReviewState = decisive[decisive.length - 1]?.state ?? null;
+          const latestDecisive = decisive[decisive.length - 1];
+          const latestReviewState = latestDecisive?.state ?? null;
+          const latestReviewSubmittedAt = latestDecisive?.submitted_at ?? null;
+          const lastFixCommentAt = findLastFixCommentTimestamp(issueComments).iso;
 
           results = [
             ...results,
@@ -866,6 +958,8 @@ export class OctokitGitHubAdapter implements GitHubPort {
               issueNumber,
               updatedAt: pr.updated_at,
               latestReviewState,
+              latestReviewSubmittedAt,
+              lastFixCommentAt,
             },
           ];
         }
@@ -931,35 +1025,32 @@ export class OctokitGitHubAdapter implements GitHubPort {
     return TE.tryCatch(
       async () => {
         const [reviews, issueComments] = await Promise.all([
-          this.octokit.rest.pulls.listReviews({
-            owner: this.owner,
-            repo: this.repo,
-            pull_number: prNumber,
+          paginateRestPages(async (page) => {
+            const res = await this.octokit.rest.pulls.listReviews({
+              owner: this.owner,
+              repo: this.repo,
+              pull_number: prNumber,
+              per_page: 100,
+              page,
+            });
+            return res.data;
           }),
-          this.octokit.rest.issues.listComments({
-            owner: this.owner,
-            repo: this.repo,
-            issue_number: prNumber,
+          paginateRestPages(async (page) => {
+            const res = await this.octokit.rest.issues.listComments({
+              owner: this.owner,
+              repo: this.repo,
+              issue_number: prNumber,
+              per_page: 100,
+              page,
+            });
+            return res.data;
           }),
         ]);
 
-        // Find the timestamp of the latest pr-flow bot review-fix comment to avoid re-sending prior rounds
-        let lastFixAtMs = 0;
-        for (const ic of issueComments.data) {
-          if (
-            ic.user?.type === 'Bot' &&
-            (ic.body ?? '').includes('Applied review fixes on `') &&
-            ic.created_at
-          ) {
-            const ts = Date.parse(ic.created_at);
-            if (!Number.isNaN(ts) && ts > lastFixAtMs) {
-              lastFixAtMs = ts;
-            }
-          }
-        }
+        const { ms: lastFixAtMs } = findLastFixCommentTimestamp(issueComments);
 
         let collected: ReadonlyArray<string> = [];
-        for (const r of reviews.data) {
+        for (const r of reviews) {
           if (!r.body || r.body.trim().length === 0) continue;
           if (r.state === 'APPROVED' || r.state === 'DISMISSED') continue;
           const submittedMs = r.submitted_at ? Date.parse(r.submitted_at) : Number.NaN;
@@ -1041,12 +1132,17 @@ export class OctokitGitHubAdapter implements GitHubPort {
         }
 
         if (!usedGraphqlThreads) {
-          const reviewComments = await this.octokit.rest.pulls.listReviewComments({
-            owner: this.owner,
-            repo: this.repo,
-            pull_number: prNumber,
+          const reviewComments = await paginateRestPages(async (page) => {
+            const res = await this.octokit.rest.pulls.listReviewComments({
+              owner: this.owner,
+              repo: this.repo,
+              pull_number: prNumber,
+              per_page: 100,
+              page,
+            });
+            return res.data;
           });
-          for (const rc of reviewComments.data) {
+          for (const rc of reviewComments) {
             const createdMs = rc.created_at ? Date.parse(rc.created_at) : Number.NaN;
             if (lastFixAtMs > 0 && !Number.isNaN(createdMs) && createdMs <= lastFixAtMs) {
               continue;
@@ -1058,7 +1154,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
           }
         }
 
-        for (const ic of issueComments.data) {
+        for (const ic of issueComments) {
           if (ic.user?.type === 'Bot') continue;
           const createdMs = ic.created_at ? Date.parse(ic.created_at) : Number.NaN;
           if (lastFixAtMs > 0 && !Number.isNaN(createdMs) && createdMs <= lastFixAtMs) {
@@ -1179,24 +1275,53 @@ export class OctokitGitHubAdapter implements GitHubPort {
         TE.tryCatch(
           async () => {
             const [reviews, issueComments] = await Promise.all([
-              this.octokit.rest.pulls.listReviews({
-                owner: this.owner,
-                repo: this.repo,
-                pull_number: prNumber,
+              paginateRestPages(async (page) => {
+                const res = await this.octokit.rest.pulls.listReviews({
+                  owner: this.owner,
+                  repo: this.repo,
+                  pull_number: prNumber,
+                  per_page: 100,
+                  page,
+                });
+                return res.data;
               }),
-              this.octokit.rest.issues.listComments({
-                owner: this.owner,
-                repo: this.repo,
-                issue_number: prNumber,
+              paginateRestPages(async (page) => {
+                const res = await this.octokit.rest.issues.listComments({
+                  owner: this.owner,
+                  repo: this.repo,
+                  issue_number: prNumber,
+                  per_page: 100,
+                  page,
+                });
+                return res.data;
               }),
             ]);
 
-            const reviewTexts: ReadonlyArray<string> = reviews.data
-              .filter((r) => Boolean(r.body && r.body.trim().length > 0))
+            const { ms: lastFixAtMs } = findLastFixCommentTimestamp(issueComments);
+
+            const reviewTexts: ReadonlyArray<string> = reviews
+              .filter((r) => {
+                if (!r.body || r.body.trim().length === 0) return false;
+                if (r.state === 'APPROVED' || r.state === 'DISMISSED') return false;
+                const submittedMs = r.submitted_at ? Date.parse(r.submitted_at) : Number.NaN;
+                if (lastFixAtMs > 0 && !Number.isNaN(submittedMs) && submittedMs <= lastFixAtMs) {
+                  return false;
+                }
+                return true;
+              })
               .map((r) => `[Review ${r.state} by ${r.user?.login ?? 'unknown'}]: ${r.body}`);
-            const issueTexts: ReadonlyArray<string> = issueComments.data
-              .filter((ic) => ic.user?.type !== 'Bot')
+
+            const issueTexts: ReadonlyArray<string> = issueComments
+              .filter((ic) => {
+                if (ic.user?.type === 'Bot') return false;
+                const createdMs = ic.created_at ? Date.parse(ic.created_at) : Number.NaN;
+                if (lastFixAtMs > 0 && !Number.isNaN(createdMs) && createdMs <= lastFixAtMs) {
+                  return false;
+                }
+                return true;
+              })
               .map((ic) => `[PR comment by ${ic.user?.login ?? 'unknown'}]: ${ic.body ?? ''}`);
+
             const generalComments: ReadonlyArray<string> = [...reviewTexts, ...issueTexts];
 
             const unresolvedThreads = allThreads.filter(
@@ -1368,14 +1493,16 @@ export class OctokitGitHubAdapter implements GitHubPort {
         // 4. Check required labels
         if (opts.expectedLabels && opts.expectedLabels.length > 0) {
           try {
-            const existing = await this.octokit.request('GET /repos/{owner}/{repo}/labels', {
-              owner: this.owner,
-              repo: this.repo,
-              per_page: 100,
+            const existing = await paginateRestPages(async (page) => {
+              const res = await this.octokit.request('GET /repos/{owner}/{repo}/labels', {
+                owner: this.owner,
+                repo: this.repo,
+                per_page: 100,
+                page,
+              });
+              return res.data;
             });
-            const existingNames = new Set(
-              (existing.data as ReadonlyArray<{ name: string }>).map((l) => l.name),
-            );
+            const existingNames = new Set(existing.map((l) => l.name));
             const missingLabels = opts.expectedLabels.filter(
               (l) => !existingNames.has(isoLabelName.unwrap(l.name)),
             );

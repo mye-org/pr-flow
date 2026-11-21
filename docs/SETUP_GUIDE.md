@@ -9,20 +9,20 @@
 
 In your target repository, ask your AI coding assistant:
 
-> *"Use `pr-flow` (`github.com/mingqianye/pr-flow`) to set up the GitHub infrastructure."*
+> *"Use `pr-flow` (`github.com/mye-org/pr-flow`) to set up the GitHub infrastructure."*
 
 The AI assistant will follow [`skills/setup-pr-flow/SKILL.md`](../skills/setup-pr-flow/SKILL.md) as an **interactive setup wizard**:
 - Confirms detected repository settings (`baseBranch`, `setupCommand`, `verifyCommand`, `wipLimit`, `reviewMode`) before generating files.
 - Guides you through customizing `AGENTS.md` and syncing labels.
 - If the agent's token lacks org-admin permissions for `pr-flow-status` (`403 Resource not accessible by integration`), pauses and walks you through creating the field via local `gh` CLI or GitHub Organization Settings.
-- Guides you through adding `GEMINI_API_KEY` and committing/pushing the generated files.
+- Guides you through adding `GEMINI_API_KEY`, enabling Actions PR permissions, running `pr-flow doctor`, and committing/pushing the generated files.
 
 ## Option B: CLI Bootstrap
 
 1. Run `pr-flow init`:
    ```bash
-   GITHUB_TOKEN=$(gh auth token) npx --yes github:mingqianye/pr-flow#v1 init \
-     --owner mingqianye \
+   GITHUB_TOKEN=$(gh auth token) npx --yes github:mye-org/pr-flow#v1 init \
+     --owner mye-org \
      --ref v1 \
      --base-branch main \
      --wip-limit 4 \
@@ -40,5 +40,10 @@ The AI assistant will follow [`skills/setup-pr-flow/SKILL.md`](../skills/setup-p
    - `.github/workflows/pr-flow-review.yml`
    - `.github/workflows/pr-flow-sync.yml`
    - `.github/workflows/pr-flow-reconcile.yml`
-3. Add `GEMINI_API_KEY` in **Repository Settings → Secrets and variables → Actions**.
-4. Commit and push to `main`.
+3. Add `GEMINI_API_KEY` in **Repository Settings → Secrets and variables → Actions** (or run `gh secret set GEMINI_API_KEY --repo <owner>/<repo>`).
+4. Enable **"Allow GitHub Actions to create and approve pull requests"** in **Repository Settings → Actions → General → Workflow permissions** (or run `gh api -X PUT repos/<owner>/<repo>/actions/permissions/workflow -F can_approve_pull_request_reviews=true`).
+5. Verify all prerequisites with `pr-flow doctor`:
+   ```bash
+   GITHUB_TOKEN=$(gh auth token) npx --yes github:mye-org/pr-flow#v1 doctor --repo <owner>/<repo>
+   ```
+6. Commit and push to `main`.

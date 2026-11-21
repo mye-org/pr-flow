@@ -20,7 +20,7 @@ Use this playbook when the user asks to set up or initialize `pr-flow` in a targ
 Inspect the target repository (without making changes yet) to auto-detect:
 1. **GitHub slug** (`<owner>/<repo>` from `git remote get-url origin`).
    - Note whether `<owner>` is a GitHub **Organization**. (GitHub Issue Fields such as `pr-flow-status` are an organization-level feature; if `<owner>` appears to be a personal user account, warn the user before proceeding.)
-2. **`pr-flow` workflow source** (`--owner` and `--ref`, e.g. `mingqianye/pr-flow#v1` or `mye-org/pr-flow#v1` if the user specified a fork/org).
+2. **`pr-flow` workflow source** (`--owner` and `--ref`, default `mye-org/pr-flow#v1`, or a custom `<owner>/pr-flow#<ref>` if the user specified a fork/org).
 3. **Default base branch** (e.g. `main` or `master`).
 4. **Setup command** (e.g. `npm ci`, `pnpm install --frozen-lockfile`, `pip install -e .[dev]`, `go mod download`, `cargo fetch`).
 5. **Verify command** (e.g. `npm run verify`, `npm test`, `pytest`, `go test ./...`, `cargo test`).

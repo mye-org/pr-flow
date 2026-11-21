@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Command } from 'commander';
@@ -18,7 +18,6 @@ import {
   branchNameForIssue,
   DEFAULT_LABELS,
   FIELD_VALUE_TO_STATUS,
-  isContainerIssue,
   isExecutableLeaf,
   STATUS_TO_FIELD_VALUE,
   type IssueNode,
@@ -40,8 +39,12 @@ import { checkPickupEligibility } from '../machine/guards.js';
 import { transitionIssue } from '../machine/issueMachine.js';
 import { materializePlan } from '../planner/materialize.js';
 import { validatePlanDag } from '../planner/validateDag.js';
-import { computeRollupEffects } from '../rollup/computeRollup.js';
 import { generateInitFiles } from './init.js';
+import {
+  parseIssueNumberFromBranch,
+  recomputeContainerRollups,
+  shouldRetryReviewPr,
+} from './reconcileHelpers.js';
 import { replyAndResolveReviewThreads } from './reviewFollowUp.js';
 
 function formatDomainError(err: DomainError) {
@@ -70,17 +73,49 @@ function fail(err: DomainError) {
   return process.exit(1);
 }
 
-function loadConfigFromDisk(configPath = 'pr-flow.config.yml') {
-  const abs = path.resolve(configPath);
+function readTextFileOrFail(filePath: string, label: string) {
+  const abs = path.resolve(filePath);
   if (!fs.existsSync(abs)) {
-    return fail({ type: 'CONFIG_ERROR', message: isoMessage.wrap(`File not found: ${abs}`) });
+    return fail({ type: 'CONFIG_ERROR', message: isoMessage.wrap(`${label} not found: ${abs}`) });
   }
-  const content = fs.readFileSync(abs, 'utf-8');
+  try {
+    return fs.readFileSync(abs, 'utf-8');
+  } catch (err) {
+    return fail({
+      type: 'CONFIG_ERROR',
+      message: isoMessage.wrap(
+        `Failed to read ${label} (${abs}): ${err instanceof Error ? err.message : String(err)}`,
+      ),
+    });
+  }
+}
+
+function readJsonFileOrFail(filePath: string, label: string) {
+  const raw = readTextFileOrFail(filePath, label);
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch (err) {
+    return fail({
+      type: 'CONFIG_ERROR',
+      message: isoMessage.wrap(
+        `Invalid JSON in ${label} (${path.resolve(filePath)}): ${err instanceof Error ? err.message : String(err)}`,
+      ),
+    });
+  }
+}
+
+function loadConfigFromDisk(configPath = 'pr-flow.config.yml') {
+  const content = readTextFileOrFail(configPath, 'pr-flow.config.yml');
   const parsed = parseConfig(content);
   if (E.isLeft(parsed)) {
     return fail(parsed.left);
   }
   return parsed.right;
+}
+
+function loadOptionalConfigFromDisk(configPath = 'pr-flow.config.yml') {
+  const abs = path.resolve(configPath);
+  return fs.existsSync(abs) ? loadConfigFromDisk(configPath) : null;
 }
 
 function createGitHubFromEnv(repoFlag?: string, statusFieldName?: string) {
@@ -110,8 +145,12 @@ async function runOrExit<T>(task: TE.TaskEither<DomainError, T>) {
   return res.right;
 }
 
-function runGit(cmd: string, cwd: string) {
-  return execSync(`git ${cmd}`, { cwd, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+function runGit(args: ReadonlyArray<string>, cwd: string) {
+  return execFileSync('git', [...args], {
+    cwd,
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
 }
 
 const program = new Command();
@@ -345,7 +384,7 @@ planCmd
   .description('Validate a plan-manifest.yml schema and dependency DAG')
   .requiredOption('--file <path>', 'Path to plan-manifest.yml')
   .action((opts: { readonly file: string }) => {
-    const content = fs.readFileSync(path.resolve(opts.file), 'utf-8');
+    const content = readTextFileOrFail(opts.file, 'plan manifest');
     const res = pipe(parsePlanManifest(content), E.chain(validatePlanDag));
     if (E.isLeft(res)) return fail(res.left);
     console.log(`Plan manifest valid (${String(res.right.issues.length)} issues).`);
@@ -355,16 +394,26 @@ planCmd
   .command('materialize')
   .description('Create GitHub issues, sub-issue links, and blocked_by dependencies from a plan manifest')
   .requiredOption('--file <path>', 'Path to plan-manifest.yml')
+  .option('--config <path>', 'Path to pr-flow.config.yml', 'pr-flow.config.yml')
+  .option('--field-name <name>', 'Issue Field name override')
   .option('--repo <owner/repo>', 'GitHub repository (defaults to GITHUB_REPOSITORY)')
-  .action(async (opts: { readonly file: string; readonly repo?: string }) => {
-    const content = fs.readFileSync(path.resolve(opts.file), 'utf-8');
-    const parsed = pipe(parsePlanManifest(content), E.chain(validatePlanDag));
-    if (E.isLeft(parsed)) return fail(parsed.left);
+  .action(
+    async (opts: {
+      readonly file: string;
+      readonly config: string;
+      readonly fieldName?: string;
+      readonly repo?: string;
+    }) => {
+      const content = readTextFileOrFail(opts.file, 'plan manifest');
+      const parsed = pipe(parsePlanManifest(content), E.chain(validatePlanDag));
+      if (E.isLeft(parsed)) return fail(parsed.left);
 
-    const github = createGitHubFromEnv(opts.repo);
-    const result = await runOrExit(materializePlan(parsed.right, github));
-    console.log(JSON.stringify(result, null, 2));
-  });
+      const config = loadOptionalConfigFromDisk(opts.config);
+      const github = createGitHubFromEnv(opts.repo, opts.fieldName ?? config?.statusFieldName);
+      const result = await runOrExit(materializePlan(parsed.right, github));
+      console.log(JSON.stringify(result, null, 2));
+    },
+  );
 
 program
   .command('claim')
@@ -375,7 +424,7 @@ program
   .action(async (opts: { readonly issue: string; readonly config: string; readonly repo?: string }) => {
     const issueNumber = Number(opts.issue);
     const config = loadConfigFromDisk(opts.config);
-    const github = createGitHubFromEnv(opts.repo);
+    const github = createGitHubFromEnv(opts.repo, config.statusFieldName);
 
     const data = await runOrExit(
       pipe(
@@ -387,9 +436,17 @@ program
       ),
     );
 
-    const wipCount = data.allOpen.filter(
-      (i) => i.status === 'in_progress' && isoIssueNumber.unwrap(i.number) !== issueNumber,
-    ).length;
+    const inProgressCandidates = data.allOpen.filter(
+      (i) => i.status === 'in_progress' && isoIssueNumber.unwrap(i.number) !== issueNumber && i.type !== 'epic',
+    );
+    let wipCount = 0;
+    for (const candidate of inProgressCandidates) {
+      if (candidate.type === 'story') {
+        const subIssues = await runOrExit(github.listSubIssues(isoIssueNumber.unwrap(candidate.number)));
+        if (subIssues.length > 0) continue;
+      }
+      wipCount++;
+    }
     const openBlockers = data.blockedBy.filter((b) => b.state === 'open').map((b) => b.number);
     const blockerState = openBlockers.length === 0 ? ('all_closed' as const) : ('has_open' as const);
 
@@ -455,7 +512,7 @@ program
       const issueNumber = Number(opts.issue);
       const prNumber = opts.pr ? Number(opts.pr) : undefined;
       const config = loadConfigFromDisk(opts.config);
-      const github = createGitHubFromEnv(opts.repo);
+      const github = createGitHubFromEnv(opts.repo, config.statusFieldName);
       const cwd = process.cwd();
       const outputDir = path.resolve(opts.outputDir);
       const resultFilePath = path.join(outputDir, 'result.json');
@@ -478,12 +535,12 @@ program
         let prDiff: string | undefined;
         try {
           const diffTarget = `origin/${config.baseBranch}...HEAD`;
-          const filesOut = runGit(`diff --name-only ${diffTarget}`, cwd);
+          const filesOut = runGit(['diff', '--name-only', diffTarget], cwd);
           changedFiles = filesOut
             .split('\n')
             .map((f) => f.trim())
             .filter(Boolean);
-          const rawDiff = runGit(`diff ${diffTarget}`, cwd);
+          const rawDiff = runGit(['diff', diffTarget], cwd);
           const MAX_DIFF_CHARS = 12_000;
           prDiff =
             rawDiff.length > MAX_DIFF_CHARS
@@ -506,7 +563,7 @@ program
       } else {
         let repoFiles: ReadonlyArray<string> | undefined;
         try {
-          const allFiles = runGit('ls-files', cwd)
+          const allFiles = runGit(['ls-files'], cwd)
             .split('\n')
             .map((f) => f.trim())
             .filter((f) => f.length > 0 && !f.startsWith('_pr_flow/'));
@@ -595,10 +652,10 @@ program
       const issueNumber = Number(opts.issue);
       const existingPr = opts.pr ? Number(opts.pr) : undefined;
       const config = loadConfigFromDisk(opts.config);
-      const github = createGitHubFromEnv(opts.repo);
+      const github = createGitHubFromEnv(opts.repo, config.statusFieldName);
       const cwd = process.cwd();
 
-      const rawResult: unknown = JSON.parse(fs.readFileSync(path.resolve(opts.result), 'utf-8'));
+      const rawResult = readJsonFileOrFail(opts.result, 'result.json');
       const parsedResult = AgentResultSchema.safeParse(rawResult);
       if (!parsedResult.success) {
         return fail({ type: 'CONFIG_ERROR', message: isoMessage.wrap('Invalid result.json format') });
@@ -654,7 +711,7 @@ program
         return;
       }
 
-      const patchContent = fs.readFileSync(path.resolve(opts.patch), 'utf-8');
+      const patchContent = readTextFileOrFail(opts.patch, 'changes.patch');
       if (patchContent.trim().length === 0) {
         const transition = transitionIssue(issue, {
           type: 'NEEDS_HUMAN_DETECTED',
@@ -666,26 +723,23 @@ program
       }
 
       try {
-        runGit('config user.name "pr-flow[bot]"', cwd);
-        runGit('config user.email "pr-flow[bot]@users.noreply.github.com"', cwd);
+        runGit(['config', 'user.name', 'pr-flow[bot]'], cwd);
+        runGit(['config', 'user.email', 'pr-flow[bot]@users.noreply.github.com'], cwd);
 
         if (existingPr) {
-          runGit(`fetch origin ${branch}`, cwd);
-          runGit(`checkout -B ${branch} origin/${branch}`, cwd);
+          runGit(['fetch', 'origin', branch], cwd);
+          runGit(['checkout', '-B', branch, `origin/${branch}`], cwd);
         } else {
-          runGit(`fetch origin ${config.baseBranch}`, cwd);
-          runGit(`checkout -B ${branch} origin/${config.baseBranch}`, cwd);
+          runGit(['fetch', 'origin', config.baseBranch], cwd);
+          runGit(['checkout', '-B', branch, `origin/${config.baseBranch}`], cwd);
         }
 
-        execSync(`git apply --index ${JSON.stringify(path.resolve(opts.patch))}`, {
-          cwd,
-          stdio: 'pipe',
-        });
+        runGit(['apply', '--index', path.resolve(opts.patch)], cwd);
         const commitMsg = existingPr
           ? `fix: address review feedback for #${String(issueNumber)}`
           : `feat: implement #${String(issueNumber)} (${isoTitle.unwrap(issue.title)})`;
-        runGit(`commit -m ${JSON.stringify(commitMsg)}`, cwd);
-        runGit(existingPr ? `push origin ${branch}` : `push --force origin ${branch}`, cwd);
+        runGit(['commit', '-m', commitMsg], cwd);
+        runGit(existingPr ? ['push', 'origin', branch] : ['push', '--force', 'origin', branch], cwd);
       } catch (err) {
         const transition = transitionIssue(issue, {
           type: 'EXECUTION_FAILED',
@@ -726,7 +780,7 @@ program
 
         let threadsToResolve: ReadonlyArray<PrReviewThread>;
         if (fs.existsSync(threadsPath)) {
-          threadsToResolve = JSON.parse(fs.readFileSync(threadsPath, 'utf-8')) as ReadonlyArray<PrReviewThread>;
+          threadsToResolve = readJsonFileOrFail(threadsPath, 'review-threads.json') as ReadonlyArray<PrReviewThread>;
         } else {
           const fetchedThreads = await runOrExit(github.getPrReviewThreads(prNumber));
           threadsToResolve = fetchedThreads.filter((t) => !t.isResolved && t.comments.length > 0);
@@ -792,8 +846,7 @@ program
     }) => {
       const prNumber = Number(opts.pr);
       const issueNumber = Number(opts.issue);
-      const configPath = path.resolve(opts.config);
-      const config = fs.existsSync(configPath) ? loadConfigFromDisk(opts.config) : null;
+      const config = loadOptionalConfigFromDisk(opts.config);
       const autoMerge = config ? config.triggers.autoMergeOnApprove : true;
       const mergeMethod = config ? config.triggers.mergeMethod : 'squash';
 
@@ -802,7 +855,7 @@ program
         return;
       }
 
-      const github = createGitHubFromEnv(opts.repo);
+      const github = createGitHubFromEnv(opts.repo, config?.statusFieldName);
       await runOrExit(github.mergePullRequest(prNumber, mergeMethod));
 
       if (issueNumber > 0) {
@@ -821,21 +874,53 @@ program
   .option('--issue <number>', 'Issue number that changed', '0')
   .option('--pr <number>', 'PR number that closed/merged', '0')
   .option('--pr-merged', 'Whether the closed PR was merged', false)
+  .option('--config <path>', 'Path to pr-flow.config.yml', 'pr-flow.config.yml')
+  .option('--field-name <name>', 'Issue Field name override')
   .option('--repo <owner/repo>', 'GitHub repository')
   .action(
     async (opts: {
       readonly issue: string;
       readonly pr: string;
       readonly prMerged: boolean;
+      readonly config: string;
+      readonly fieldName?: string;
       readonly repo?: string;
     }) => {
-      const github = createGitHubFromEnv(opts.repo);
-      const issueNumber = Number(opts.issue);
+      const config = loadOptionalConfigFromDisk(opts.config);
+      const github = createGitHubFromEnv(opts.repo, opts.fieldName ?? config?.statusFieldName);
+      let issueNumber = Number(opts.issue);
+      const prNumber = Number(opts.pr);
 
       const allIssues = await runOrExit(github.listAllIssues('all'));
       const byNumber = new Map<number, IssueNode>(
         allIssues.map((i) => [isoIssueNumber.unwrap(i.number), i]),
       );
+
+      // If a PR was merged (including manually), ensure its linked ai/issue-<N> issue transitions to fixed
+      if (opts.prMerged && prNumber > 0) {
+        if (issueNumber <= 0) {
+          const pr = await runOrExit(github.getPullRequest(prNumber));
+          const parsedIssueNum = parseIssueNumberFromBranch(pr.headRef);
+          if (parsedIssueNum !== null) {
+            issueNumber = parsedIssueNum;
+          }
+        }
+        if (issueNumber > 0) {
+          const linkedIssue = await runOrExit(github.getIssue(issueNumber));
+          const tr = transitionIssue(linkedIssue, {
+            type: 'PR_MERGED',
+            prNumber: isoPrNumber.wrap(prNumber),
+          });
+          if (tr.effects.length > 0) {
+            await runOrExit(executeEffects(tr.effects, github));
+            byNumber.set(issueNumber, {
+              ...linkedIssue,
+              status: tr.nextStatus,
+              state: tr.nextStatus === 'fixed' ? 'closed' : linkedIssue.state,
+            });
+          }
+        }
+      }
 
       // If an issue closed or merged, unblock downstream issues whose blockers are all closed
       if (issueNumber > 0) {
@@ -848,31 +933,25 @@ program
             if (blockers.every((b) => b.state === 'closed')) {
               const tr = transitionIssue(downstream, { type: 'DEPS_RESOLVED' });
               await runOrExit(executeEffects(tr.effects, github));
+              byNumber.set(downstreamNum, { ...downstream, status: 'ready' });
             }
           }
         }
       }
 
-      // Recompute rollups for any container issues
-      for (const candidate of allIssues) {
-        if (candidate.type === 'epic' || candidate.type === 'story') {
-          const subNums = await runOrExit(github.listSubIssues(isoIssueNumber.unwrap(candidate.number)));
-          if (subNums.length === 0) continue;
-          const children = subNums
-            .map((n) => byNumber.get(n))
-            .filter((n): n is IssueNode => Boolean(n));
-          if (children.length === 0) continue;
-          const { effects } = computeRollupEffects(candidate, children);
-          await runOrExit(executeEffects(effects, github));
-        }
+      // Recompute rollups bottom-up so multi-level hierarchies converge in one pass
+      const rollupRes = await recomputeContainerRollups(byNumber, github);
+      if (E.isLeft(rollupRes)) {
+        return fail(rollupRes.left);
       }
 
       console.log(
         JSON.stringify({
           synced: true,
           issueNumber,
-          prNumber: Number(opts.pr),
+          prNumber,
           prMerged: opts.prMerged,
+          rolledUp: rollupRes.right.rolledUp,
         }),
       );
     },
@@ -890,16 +969,14 @@ program
       readonly cooldownMinutes: string;
       readonly repo?: string;
     }) => {
-      const github = createGitHubFromEnv(opts.repo);
-      const configPath = path.resolve(opts.config);
-      const config = fs.existsSync(configPath) ? loadConfigFromDisk(opts.config) : null;
+      const config = loadOptionalConfigFromDisk(opts.config);
+      const github = createGitHubFromEnv(opts.repo, config?.statusFieldName);
       const allIssues = await runOrExit(github.listAllIssues('all'));
       const byNumber = new Map<number, IssueNode>(
         allIssues.map((i) => [isoIssueNumber.unwrap(i.number), i]),
       );
 
       let unblocked = 0;
-      let rolledUp = 0;
       let dispatched = 0;
 
       for (const issue of allIssues) {
@@ -915,26 +992,22 @@ program
         }
       }
 
-      const updatedIssues = Array.from(byNumber.values());
-
-      for (const candidate of updatedIssues) {
-        if (isContainerIssue(candidate) || candidate.type === 'story') {
-          const subNums = await runOrExit(github.listSubIssues(isoIssueNumber.unwrap(candidate.number)));
-          if (subNums.length === 0) continue;
-          const children = subNums
-            .map((n) => byNumber.get(n))
-            .filter((n): n is IssueNode => Boolean(n));
-          if (children.length === 0) continue;
-          const { effects } = computeRollupEffects(candidate, children);
-          if (effects.length > 0) {
-            await runOrExit(executeEffects(effects, github));
-            rolledUp++;
-          }
-        }
+      const rollupRes = await recomputeContainerRollups(byNumber, github);
+      if (E.isLeft(rollupRes)) {
+        return fail(rollupRes.left);
       }
+      const { rolledUp, containerNumbers, byNumber: rolledUpByNumber } = rollupRes.right;
+
+      const updatedIssues = Array.from(rolledUpByNumber.values());
 
       if (config && config.triggers.autoPickup) {
-        const wipCount = updatedIssues.filter((i) => i.state === 'open' && i.status === 'in_progress').length;
+        const wipCount = updatedIssues.filter(
+          (i) =>
+            i.state === 'open' &&
+            i.status === 'in_progress' &&
+            i.type !== 'epic' &&
+            !containerNumbers.has(isoIssueNumber.unwrap(i.number)),
+        ).length;
         let availableSlots = Math.max(0, config.wipLimit - wipCount);
         const cooldownMs = Number(opts.cooldownMinutes) * 60_000;
         const now = Date.now();
@@ -942,11 +1015,11 @@ program
         for (const issue of updatedIssues) {
           if (availableSlots <= 0) break;
           if (issue.state !== 'open' || issue.status !== 'ready') continue;
-          if (!isExecutableLeaf(issue)) continue;
+          const num = isoIssueNumber.unwrap(issue.number);
+          if (containerNumbers.has(num) || !isExecutableLeaf(issue)) continue;
           const ageMs = now - Date.parse(isoIsoTimestamp.unwrap(issue.updatedAt));
           if (!Number.isNaN(ageMs) && ageMs < cooldownMs) continue;
 
-          const num = isoIssueNumber.unwrap(issue.number);
           const blockers = await runOrExit(github.listBlockedBy(num));
           if (!blockers.every((b) => b.state === 'closed')) continue;
 
@@ -965,13 +1038,10 @@ program
         // Also auto-retry open ai-managed PRs with unaddressed CHANGES_REQUESTED past cooldown
         const managedPrs = await runOrExit(github.listOpenAiManagedPrs());
         for (const pr of managedPrs) {
-          if (pr.latestReviewState !== 'CHANGES_REQUESTED') continue;
-          const linkedIssue = byNumber.get(pr.issueNumber);
-          if (!linkedIssue || linkedIssue.state !== 'open' || linkedIssue.status !== 'review_pending') {
+          const linkedIssue = rolledUpByNumber.get(pr.issueNumber);
+          if (!shouldRetryReviewPr({ pr, linkedIssue, nowMs: now, cooldownMs })) {
             continue;
           }
-          const ageMs = now - Date.parse(pr.updatedAt);
-          if (!Number.isNaN(ageMs) && ageMs < cooldownMs) continue;
 
           const comments = await runOrExit(github.listIssueComments(pr.issueNumber));
           let retryCount = 0;

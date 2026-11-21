@@ -17,6 +17,9 @@ on:
 jobs:
   claim:
     runs-on: ubuntu-latest
+    concurrency:
+      group: fsm-claim
+      cancel-in-progress: false
     permissions:
       contents: read
       issues: write
@@ -96,9 +99,21 @@ jobs:
         with:
           node-version: '22'
       - uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           name: pr-flow-out-${{ inputs.issue_number }}
           path: pr-flow-out/
+      - name: Ensure fallback result exists if execute crashed before artifact upload
+        run: |
+          mkdir -p pr-flow-out
+          if [ ! -f pr-flow-out/result.json ]; then
+            cat <<'EOF' > pr-flow-out/result.json
+          {"status":"failed","summary":"Agent execute job terminated before producing result.json.","reason":"The execute job failed or was cancelled before uploading pr-flow-out/result.json. Inspect workflow logs for details.","testsRun":false}
+          EOF
+          fi
+          if [ ! -f pr-flow-out/changes.patch ]; then
+            : > pr-flow-out/changes.patch
+          fi
       - name: Finalize branch, PR, and issue state
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

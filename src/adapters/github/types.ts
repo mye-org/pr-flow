@@ -30,6 +30,8 @@ export type ManagedPrSummary = {
   readonly issueNumber: number;
   readonly updatedAt: string;
   readonly latestReviewState: string | null;
+  readonly latestReviewSubmittedAt: string | null;
+  readonly lastFixCommentAt: string | null;
 };
 
 export type PreflightCheckResult = {
@@ -87,6 +89,7 @@ export type GitHubPort = {
   addBlockedBy(issueNumber: number, blockerNumber: number): TE.TaskEither<DomainError, void>;
 
   // Pull Requests
+  getPullRequest(prNumber: number): TE.TaskEither<DomainError, PullRequestSummary>;
   listOpenPrsForIssue(issueNumber: number): TE.TaskEither<DomainError, ReadonlyArray<PullRequestSummary>>;
   listOpenAiManagedPrs(): TE.TaskEither<DomainError, ReadonlyArray<ManagedPrSummary>>;
   createPullRequest(input: CreatePullRequestInput): TE.TaskEither<DomainError, PullRequestSummary>;

@@ -50,6 +50,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.resolve_issue.outputs.head_ref }}
+          fetch-depth: 0
       - uses: actions/checkout@v4
         with:
           repository: mye-org/pr-flow
@@ -62,10 +63,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          BASE_REF: ${{ needs.resolve_issue.outputs.base_ref }}
         run: |
           CONFIG_PATH="pr-flow.config.yml"
-          if git fetch origin "${{ needs.resolve_issue.outputs.base_ref }}" --depth=1 2>/dev/null && \
-             git show "origin/${{ needs.resolve_issue.outputs.base_ref }}:pr-flow.config.yml" > /tmp/pr-flow.config.yml 2>/dev/null; then
+          if git fetch origin "$BASE_REF" 2>/dev/null && \
+             git show "origin/$BASE_REF:pr-flow.config.yml" > /tmp/pr-flow.config.yml 2>/dev/null; then
             CONFIG_PATH="/tmp/pr-flow.config.yml"
           fi
           node _pr_flow/dist/cli.cjs execute \
@@ -100,9 +102,21 @@ jobs:
         with:
           node-version: '22'
       - uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           name: pr-flow-review-${{ inputs.pr_number }}
           path: pr-flow-out/
+      - name: Ensure fallback result exists if execute crashed before artifact upload
+        run: |
+          mkdir -p pr-flow-out
+          if [ ! -f pr-flow-out/result.json ]; then
+            cat <<'EOF' > pr-flow-out/result.json
+          {"status":"failed","summary":"Review execute job terminated before producing result.json.","reason":"The execute job failed or was cancelled before uploading pr-flow-out/result.json. Inspect workflow logs for details.","testsRun":false}
+          EOF
+          fi
+          if [ ! -f pr-flow-out/changes.patch ]; then
+            : > pr-flow-out/changes.patch
+          fi
       - name: Append review fix commit to PR branch
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

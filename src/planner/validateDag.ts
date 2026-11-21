@@ -45,6 +45,7 @@ const collectRefErrorsForIssue = (
   ...(issue.parentId && !allIds.has(issue.parentId)
     ? [`Issue '${issue.id}' references unknown parentId '${issue.parentId}'`]
     : []),
+  ...(issue.parentId === issue.id ? [`Issue '${issue.id}' cannot be its own parent`] : []),
   ...pipe(
     issue.blockedBy,
     RA.chain((dep) => [
@@ -54,13 +55,23 @@ const collectRefErrorsForIssue = (
   ),
 ];
 
+const addEdgeToAdj = (
+  adj: ReadonlyMap<string, ReadonlyArray<string>>,
+  from: string,
+  to: string,
+) => new Map(adj).set(from, [...(adj.get(from) ?? []), to]);
+
 const addDepsToAdj = (
   adj: ReadonlyMap<string, ReadonlyArray<string>>,
   issue: PlanIssueNode,
 ) =>
   pipe(
-    issue.blockedBy,
-    RA.reduce(adj, (m, dep) => new Map(m).set(dep, [...(m.get(dep) ?? []), issue.id])),
+    issue.parentId ? addEdgeToAdj(adj, issue.parentId, issue.id) : adj,
+    (withParent) =>
+      pipe(
+        issue.blockedBy,
+        RA.reduce(withParent, (m, dep) => addEdgeToAdj(m, dep, issue.id)),
+      ),
   );
 
 const buildAdjacency = (

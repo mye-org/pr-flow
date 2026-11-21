@@ -87,13 +87,66 @@ describe('generateInitFiles', () => {
 });
 
 describe('OctokitGitHubAdapter.ensureStatusField', () => {
-  it('returns actionable remediation instructions on HTTP 403', async () => {
+  it('succeeds via GraphQL without calling org REST API when pr-flow-status already exists', async () => {
     const adapter = new OctokitGitHubAdapter({
       token: 'test-token',
       owner: 'mye-org',
       repo: 'pr-flow-demo',
     });
-    const octokit = (adapter as unknown as { octokit: { request: (...args: unknown[]) => Promise<unknown> } }).octokit;
+    const octokit = (
+      adapter as unknown as {
+        octokit: {
+          graphql: (...args: unknown[]) => Promise<unknown>;
+          request: (...args: unknown[]) => Promise<unknown>;
+        };
+      }
+    ).octokit;
+    vi.spyOn(octokit, 'graphql').mockResolvedValueOnce({
+      repository: {
+        issueFields: {
+          nodes: [
+            {
+              __typename: 'IssueFieldSingleSelect',
+              id: 'IFSS_123',
+              name: 'pr-flow-status',
+              options: [
+                { id: 'opt1', name: 'backlog' },
+                { id: 'opt2', name: 'blocked-dep' },
+                { id: 'opt3', name: 'ready' },
+                { id: 'opt4', name: 'in-progress' },
+                { id: 'opt5', name: 'review-pending' },
+                { id: 'opt6', name: 'fixed' },
+                { id: 'opt7', name: 'needs-human' },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    const requestSpy = vi.spyOn(octokit, 'request');
+
+    const res = await adapter.ensureStatusField()();
+    expect(E.isRight(res)).toBe(true);
+    expect(requestSpy).not.toHaveBeenCalled();
+  });
+
+  it('returns actionable remediation instructions on HTTP 403 when field does not exist', async () => {
+    const adapter = new OctokitGitHubAdapter({
+      token: 'test-token',
+      owner: 'mye-org',
+      repo: 'pr-flow-demo',
+    });
+    const octokit = (
+      adapter as unknown as {
+        octokit: {
+          graphql: (...args: unknown[]) => Promise<unknown>;
+          request: (...args: unknown[]) => Promise<unknown>;
+        };
+      }
+    ).octokit;
+    vi.spyOn(octokit, 'graphql').mockResolvedValueOnce({
+      repository: { issueFields: { nodes: [] } },
+    });
     vi.spyOn(octokit, 'request').mockRejectedValueOnce(
       Object.assign(new Error('Resource not accessible by integration'), { status: 403 }),
     );
@@ -110,13 +163,23 @@ describe('OctokitGitHubAdapter.ensureStatusField', () => {
     }
   });
 
-  it('returns organization hint on HTTP 404', async () => {
+  it('returns organization hint on HTTP 404 when field does not exist', async () => {
     const adapter = new OctokitGitHubAdapter({
       token: 'test-token',
       owner: 'personal-user',
       repo: 'demo',
     });
-    const octokit = (adapter as unknown as { octokit: { request: (...args: unknown[]) => Promise<unknown> } }).octokit;
+    const octokit = (
+      adapter as unknown as {
+        octokit: {
+          graphql: (...args: unknown[]) => Promise<unknown>;
+          request: (...args: unknown[]) => Promise<unknown>;
+        };
+      }
+    ).octokit;
+    vi.spyOn(octokit, 'graphql').mockResolvedValueOnce({
+      repository: { issueFields: { nodes: [] } },
+    });
     vi.spyOn(octokit, 'request').mockRejectedValueOnce(
       Object.assign(new Error('Not Found'), { status: 404 }),
     );

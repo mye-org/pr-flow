@@ -73,7 +73,7 @@ GITHUB_TOKEN=$(gh auth token) npx --yes github:<prFlowOwner>/pr-flow#<prFlowRef>
 
 ## Stage 4: Sync Organization Issue Field (`pr-flow-status`)
 
-Ensure the `pr-flow-status` Single-Select Issue Field exists in the `<owner>` organization:
+Ensure the `pr-flow-status` Single-Select Issue Field exists in the `<owner>` organization (`fields sync` checks existence via repo-scoped GraphQL first and only calls the org-admin creation API if missing):
 
 ```bash
 GITHUB_TOKEN=$(gh auth token) npx --yes github:<prFlowOwner>/pr-flow#<prFlowRef> fields sync --repo <owner>/<repo>
@@ -81,7 +81,7 @@ GITHUB_TOKEN=$(gh auth token) npx --yes github:<prFlowOwner>/pr-flow#<prFlowRef>
 
 - **If it succeeds:** Report that `pr-flow-status` is ready in `<owner>` and proceed to Stage 5.
 - **If it fails with `403 Resource not accessible by integration` (or similar permission error):**
-  - Do **not** abort the wizard. Explain that the current environment's GitHub token (such as a VM GitHub App / integration token) does not have **organization-admin** permissions required for org-level Issue Fields.
+  - Do **not** abort the wizard. Explain that `pr-flow-status` does not exist yet in `<owner>` and the current environment's GitHub token (such as a VM GitHub App / integration token) does not have **organization-admin** permissions required to create a new org-level Issue Field.
   - Present both remediation options clearly and **wait for the user's response**:
     1. **Option A — Run locally with your org-admin `gh` CLI:**
        ```bash

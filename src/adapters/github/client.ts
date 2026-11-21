@@ -128,10 +128,10 @@ export class OctokitGitHubAdapter implements GitHubPort {
     this.statusFieldName = options.statusFieldName ?? PR_FLOW_STATUS_FIELD_NAME;
   }
 
-  private async resolveStatusField(): Promise<{
+  private async findStatusFieldViaGraphql(): Promise<{
     id: string;
     optionsByName: Map<string, string>;
-  }> {
+  } | null> {
     if (this.cachedStatusField !== null) {
       return this.cachedStatusField;
     }
@@ -175,9 +175,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
       (f) => f.__typename === 'IssueFieldSingleSelect' && f.name === this.statusFieldName,
     );
     if (!match || !match.id || !match.options) {
-      throw new Error(
-        `Issue field "${this.statusFieldName}" not found in organization "${this.owner}". Run "pr-flow fields sync --repo ${this.owner}/${this.repo}" with an org-admin token or create it in Organization Settings -> Issue Fields.`,
-      );
+      return null;
     }
 
     this.cachedStatusField = {
@@ -185,6 +183,19 @@ export class OctokitGitHubAdapter implements GitHubPort {
       optionsByName: new Map(match.options.map((opt) => [opt.name, opt.id])),
     };
     return this.cachedStatusField;
+  }
+
+  private async resolveStatusField(): Promise<{
+    id: string;
+    optionsByName: Map<string, string>;
+  }> {
+    const field = await this.findStatusFieldViaGraphql();
+    if (!field) {
+      throw new Error(
+        `Issue field "${this.statusFieldName}" not found in organization "${this.owner}". Run "pr-flow fields sync --repo ${this.owner}/${this.repo}" with an org-admin token or create it in Organization Settings -> Issue Fields.`,
+      );
+    }
+    return field;
   }
 
   private getIssueStatusFieldValue(issueNumber: number): TE.TaskEither<DomainError, string | null> {
@@ -292,12 +303,15 @@ export class OctokitGitHubAdapter implements GitHubPort {
   ensureStatusField(): TE.TaskEither<DomainError, void> {
     return TE.tryCatch(
       async () => {
-        const res = await this.octokit.request('GET /orgs/{org}/issue-fields', {
-          org: this.owner,
-        });
-        const fields = res.data as Array<{ id: number; name: string }>;
-        const existing = fields.find((f) => f.name === this.statusFieldName);
+        const existing = await this.findStatusFieldViaGraphql();
         if (existing) {
+          const missing = PR_FLOW_STATUS_OPTIONS.filter((opt) => !existing.optionsByName.has(opt.name));
+          if (missing.length > 0) {
+            throw new Error(
+              `Issue field "${this.statusFieldName}" exists in "${this.owner}" but is missing required options: ${missing.map((m) => m.name).join(', ')}. ` +
+                `Add them at https://github.com/organizations/${this.owner}/settings/issue-fields.`,
+            );
+          }
           return;
         }
         await this.octokit.request('POST /orgs/{org}/issue-fields', {
@@ -322,8 +336,8 @@ export class OctokitGitHubAdapter implements GitHubPort {
           return {
             ...baseErr,
             message:
-              `Failed to ensure "${this.statusFieldName}" issue field in org "${this.owner}" (HTTP 403: token lacks organization-admin permissions for org-level Issue Fields). ` +
-              `Run \`GITHUB_TOKEN=$(gh auth token) npx --yes github:<owner>/pr-flow#v1 fields sync --repo ${this.owner}/${this.repo}\` with an org-admin token, ` +
+              `Failed to create "${this.statusFieldName}" issue field in org "${this.owner}" (HTTP 403: token lacks organization-admin permissions to create org-level Issue Fields). ` +
+              `Run \`GITHUB_TOKEN=$(gh auth token) npx --yes github:mye-org/pr-flow#v1 fields sync --repo ${this.owner}/${this.repo}\` with an org-admin token, ` +
               `or create the single-select field "${this.statusFieldName}" (options: ${optionNames}) at https://github.com/organizations/${this.owner}/settings/issue-fields.`,
           };
         }

@@ -230,6 +230,7 @@ Use this skill to develop features in any repository governed by \`pr-flow\`.
 - \`type:story\`: Container if it has sub-issues; executable leaf if it has **0** sub-issues.
 - \`type:task\` / \`type:bug\`: Executable leaf (**1 issue = 1 PR = 1 commit** on \`main\`).
 - Use \`blockedBy: [id1, id2]\` to form a Directed Acyclic Graph (DAG) with no cycles or dangling IDs.
+- \`pr-flow plan materialize\` automatically appends **Development Standards** (declarative programming style, TypeScript type-driven development, functional programming style) to every created issue description.
 
 \`\`\`yaml
 version: 1

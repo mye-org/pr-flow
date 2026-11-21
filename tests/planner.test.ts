@@ -3,7 +3,7 @@ import * as TE from 'fp-ts/TaskEither';
 import { describe, expect, it } from 'vitest';
 import type { GitHubPort } from '../src/adapters/github/types.js';
 import { parsePlanManifest } from '../src/domain/plan.js';
-import { materializePlan } from '../src/planner/materialize.js';
+import { formatIssueBody, ISSUE_DEVELOPMENT_STANDARDS, materializePlan } from '../src/planner/materialize.js';
 import { topoSortPlan } from '../src/planner/topoSort.js';
 import { validatePlanDag } from '../src/planner/validateDag.js';
 
@@ -74,12 +74,14 @@ issues:
     if (E.isLeft(parsed)) return;
 
     let nextNum = 10;
+    const createdBodies: Array<{ title: string; body: string }> = [];
     const subLinks: Array<[number, number]> = [];
     const depLinks: Array<[number, number]> = [];
     const statusUpdates: Array<[number, string]> = [];
 
     const mockGitHub: Partial<GitHubPort> = {
-      createIssue: () => {
+      createIssue: (input) => {
+        createdBodies.push({ title: input.title, body: input.body });
         const num = nextNum++;
         return TE.right({ number: num, url: `https://github.com/o/r/issues/${num}` });
       },
@@ -104,6 +106,23 @@ issues:
       expect(statusUpdates).toHaveLength(4);
       expect(subLinks).toHaveLength(3);
       expect(depLinks).toHaveLength(1);
+      expect(createdBodies).toHaveLength(4);
+      for (const created of createdBodies) {
+        expect(created.body).toContain('declarative programming style');
+        expect(created.body).toContain('TypeScript type-driven development');
+        expect(created.body).toContain('functional programming style');
+      }
+      expect(createdBodies[0]?.body).toBe(`End-to-end auth\n\n${ISSUE_DEVELOPMENT_STANDARDS}`);
+      expect(createdBodies[1]?.body).toBe(ISSUE_DEVELOPMENT_STANDARDS);
     }
+  });
+
+  it('formatIssueBody appends standards without duplicating existing sections', () => {
+    expect(formatIssueBody('')).toBe(ISSUE_DEVELOPMENT_STANDARDS);
+    expect(formatIssueBody('  ## Acceptance Criteria\n- Test  ')).toBe(
+      `## Acceptance Criteria\n- Test\n\n${ISSUE_DEVELOPMENT_STANDARDS}`,
+    );
+    const alreadyFormatted = `## Goal\nDo thing\n\n${ISSUE_DEVELOPMENT_STANDARDS}`;
+    expect(formatIssueBody(alreadyFormatted)).toBe(alreadyFormatted);
   });
 });

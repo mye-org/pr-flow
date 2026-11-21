@@ -23714,6 +23714,21 @@ function validatePlanDag(manifest) {
 }
 
 // src/planner/materialize.ts
+var ISSUE_DEVELOPMENT_STANDARDS = [
+  "## Development Standards",
+  "- Always use **declarative programming style**.",
+  "- Always use **TypeScript type-driven development**.",
+  "- Always use **functional programming style**."
+].join("\n");
+function formatIssueBody(body) {
+  const trimmed = body.trim();
+  if (trimmed.includes("## Development Standards")) {
+    return trimmed;
+  }
+  return trimmed.length > 0 ? `${trimmed}
+
+${ISSUE_DEVELOPMENT_STANDARDS}` : ISSUE_DEVELOPMENT_STANDARDS;
+}
 function materializePlan(manifest, github) {
   return pipe(
     fromEither(validatePlanDag(manifest)),
@@ -23725,7 +23740,7 @@ function materializePlan(manifest, github) {
       const createEpicIfPresent = validManifest.epic ? pipe(
         github.createIssue({
           title: validManifest.epic.title,
-          body: validManifest.epic.body,
+          body: formatIssueBody(validManifest.epic.body),
           labels: [
             TYPE_TO_LABEL.epic,
             AI_MANAGED_LABEL
@@ -23754,7 +23769,7 @@ function materializePlan(manifest, github) {
                 return pipe(
                   github.createIssue({
                     title: node.title,
-                    body: node.body,
+                    body: formatIssueBody(node.body),
                     labels
                   }),
                   chain2((created) => {
@@ -24056,6 +24071,7 @@ Use this skill to develop features in any repository governed by \`pr-flow\`.
 - \`type:story\`: Container if it has sub-issues; executable leaf if it has **0** sub-issues.
 - \`type:task\` / \`type:bug\`: Executable leaf (**1 issue = 1 PR = 1 commit** on \`main\`).
 - Use \`blockedBy: [id1, id2]\` to form a Directed Acyclic Graph (DAG) with no cycles or dangling IDs.
+- \`pr-flow plan materialize\` automatically appends **Development Standards** (declarative programming style, TypeScript type-driven development, functional programming style) to every created issue description.
 
 \`\`\`yaml
 version: 1

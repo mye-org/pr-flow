@@ -17,6 +17,23 @@ export interface MaterializedPlanResult {
   dependencyLinks: Array<{ issue: number; blockedBy: number }>;
 }
 
+export const ISSUE_DEVELOPMENT_STANDARDS = [
+  '## Development Standards',
+  '- Always use **declarative programming style**.',
+  '- Always use **TypeScript type-driven development**.',
+  '- Always use **functional programming style**.',
+].join('\n');
+
+export function formatIssueBody(body: string): string {
+  const trimmed = body.trim();
+  if (trimmed.includes('## Development Standards')) {
+    return trimmed;
+  }
+  return trimmed.length > 0
+    ? `${trimmed}\n\n${ISSUE_DEVELOPMENT_STANDARDS}`
+    : ISSUE_DEVELOPMENT_STANDARDS;
+}
+
 export function materializePlan(
   manifest: PlanManifest,
   github: GitHubPort,
@@ -33,7 +50,7 @@ export function materializePlan(
         ? pipe(
             github.createIssue({
               title: validManifest.epic.title,
-              body: validManifest.epic.body,
+              body: formatIssueBody(validManifest.epic.body),
               labels: [
                 TYPE_TO_LABEL.epic,
                 AI_MANAGED_LABEL,
@@ -65,7 +82,7 @@ export function materializePlan(
                   return pipe(
                     github.createIssue({
                       title: node.title,
-                      body: node.body,
+                      body: formatIssueBody(node.body),
                       labels,
                     }),
                     TE.chain((created) => {

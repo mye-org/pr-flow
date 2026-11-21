@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
         with:
-          repository: mingqianye/pr-flow
+          repository: mye-org/pr-flow
           ref: ${{ inputs.pr_flow_ref }}
           path: _pr_flow
       - uses: actions/setup-node@v4

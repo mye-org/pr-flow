@@ -1,22 +1,51 @@
 import type { IssueStatus } from './issue.js';
+import type {
+  BranchName,
+  Count,
+  IssueNumber,
+  Message,
+  PrNumber,
+  ReviewerName,
+} from './newtypes.js';
+
+export type LeafKind = 'leaf' | 'container';
+export type BlockerState = 'all_closed' | 'has_open';
 
 export type IssueEvent =
-  | { type: 'DEPS_RESOLVED' }
-  | { type: 'DEPS_BLOCKED'; blockingIssues: number[] }
+  | { readonly type: 'DEPS_RESOLVED' }
+  | { readonly type: 'DEPS_BLOCKED'; readonly blockingIssues: ReadonlyArray<IssueNumber> }
   | {
-      type: 'PICKUP_REQUESTED';
-      wipCount: number;
-      wipLimit: number;
-      openPrCount: number;
-      isLeaf: boolean;
-      allBlockersClosed: boolean;
+      readonly type: 'PICKUP_REQUESTED';
+      readonly wipCount: Count;
+      readonly wipLimit: Count;
+      readonly openPrCount: Count;
+      readonly leafKind: LeafKind;
+      readonly blockerState: BlockerState;
     }
-  | { type: 'EXECUTION_SUCCEEDED'; prNumber: number; branch: string; summary: string }
-  | { type: 'EXECUTION_FAILED'; reason: string }
-  | { type: 'TRANSIENT_EXECUTION_FAILED'; reason: string; retryCount: number; maxRetries: number }
-  | { type: 'NEEDS_HUMAN_DETECTED'; reason: string }
-  | { type: 'REVIEW_CHANGES_REQUESTED'; prNumber: number; reviewer: string }
-  | { type: 'REVIEW_FIX_SUCCEEDED'; prNumber: number; summary: string }
-  | { type: 'PR_MERGED'; prNumber: number }
-  | { type: 'HUMAN_REQUEUED' }
-  | { type: 'ROLLUP_UPDATED'; targetStatus: IssueStatus };
+  | {
+      readonly type: 'EXECUTION_SUCCEEDED';
+      readonly prNumber: PrNumber;
+      readonly branch: BranchName;
+      readonly summary: Message;
+    }
+  | { readonly type: 'EXECUTION_FAILED'; readonly reason: Message }
+  | {
+      readonly type: 'TRANSIENT_EXECUTION_FAILED';
+      readonly reason: Message;
+      readonly retryCount: Count;
+      readonly maxRetries: Count;
+    }
+  | { readonly type: 'NEEDS_HUMAN_DETECTED'; readonly reason: Message }
+  | {
+      readonly type: 'REVIEW_CHANGES_REQUESTED';
+      readonly prNumber: PrNumber;
+      readonly reviewer: ReviewerName;
+    }
+  | {
+      readonly type: 'REVIEW_FIX_SUCCEEDED';
+      readonly prNumber: PrNumber;
+      readonly summary: Message;
+    }
+  | { readonly type: 'PR_MERGED'; readonly prNumber: PrNumber }
+  | { readonly type: 'HUMAN_REQUEUED' }
+  | { readonly type: 'ROLLUP_UPDATED'; readonly targetStatus: IssueStatus };

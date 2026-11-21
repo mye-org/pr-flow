@@ -1,105 +1,105 @@
-import type * as TE from 'fp-ts/TaskEither';
+import type * as TE from 'fp-ts/lib/TaskEither';
 import type { DomainError } from '../../domain/errors.js';
 import type { IssueNode, IssueStatus, LabelDefinition } from '../../domain/issue.js';
 
-export interface CreateIssueInput {
-  title: string;
-  body: string;
-  labels: string[];
-}
+export type CreateIssueInput = {
+  readonly title: string;
+  readonly body: string;
+  readonly labels: ReadonlyArray<string>;
+};
 
-export interface CreatePullRequestInput {
-  title: string;
-  body: string;
-  head: string;
-  base: string;
-  labels?: string[];
-}
+export type CreatePullRequestInput = {
+  readonly title: string;
+  readonly body: string;
+  readonly head: string;
+  readonly base: string;
+  readonly labels?: ReadonlyArray<string>;
+};
 
-export interface PullRequestSummary {
-  number: number;
-  url: string;
-  headRef: string;
-  state: 'open' | 'closed';
-  merged: boolean;
-}
+export type PullRequestSummary = {
+  readonly number: number;
+  readonly url: string;
+  readonly headRef: string;
+  readonly state: 'open' | 'closed';
+  readonly merged: boolean;
+};
 
-export interface ManagedPrSummary {
-  number: number;
-  headRef: string;
-  issueNumber: number;
-  updatedAt: string;
-  latestReviewState: string | null;
-}
+export type ManagedPrSummary = {
+  readonly number: number;
+  readonly headRef: string;
+  readonly issueNumber: number;
+  readonly updatedAt: string;
+  readonly latestReviewState: string | null;
+};
 
-export interface PreflightCheckResult {
-  name: string;
-  status: 'pass' | 'warn' | 'fail';
-  message: string;
-  remediation?: string;
-}
+export type PreflightCheckResult = {
+  readonly name: string;
+  readonly status: 'pass' | 'warn' | 'fail';
+  readonly message: string;
+  readonly remediation?: string;
+};
 
-export interface PrReviewThreadComment {
-  id: string;
-  databaseId: number | null;
-  author: string;
-  body: string;
-}
+export type PrReviewThreadComment = {
+  readonly id: string;
+  readonly databaseId: number | null;
+  readonly author: string;
+  readonly body: string;
+};
 
-export interface PrReviewThread {
-  threadId: string;
-  isResolved: boolean;
-  isOutdated: boolean;
-  path: string;
-  line: number | null;
-  comments: PrReviewThreadComment[];
-}
+export type PrReviewThread = {
+  readonly threadId: string;
+  readonly isResolved: boolean;
+  readonly isOutdated: boolean;
+  readonly path: string;
+  readonly line: number | null;
+  readonly comments: ReadonlyArray<PrReviewThreadComment>;
+};
 
-export interface PrReviewFeedback {
-  unresolvedThreads: PrReviewThread[];
-  generalComments: string[];
-}
+export type PrReviewFeedback = {
+  readonly unresolvedThreads: ReadonlyArray<PrReviewThread>;
+  readonly generalComments: ReadonlyArray<string>;
+};
 
-export interface GitHubPort {
+export type GitHubPort = {
   getIssue(issueNumber: number): TE.TaskEither<DomainError, IssueNode>;
-  listAllIssues(state?: 'open' | 'closed' | 'all'): TE.TaskEither<DomainError, IssueNode[]>;
-  createIssue(input: CreateIssueInput): TE.TaskEither<DomainError, { number: number; url: string }>;
+  listAllIssues(state?: 'open' | 'closed' | 'all'): TE.TaskEither<DomainError, ReadonlyArray<IssueNode>>;
+  createIssue(input: CreateIssueInput): TE.TaskEither<DomainError, { readonly number: number; readonly url: string }>;
   closeIssue(issueNumber: number): TE.TaskEither<DomainError, void>;
   reopenIssue(issueNumber: number): TE.TaskEither<DomainError, void>;
   setIssueStatus(issueNumber: number, status: IssueStatus): TE.TaskEither<DomainError, void>;
   ensureStatusField(): TE.TaskEither<DomainError, void>;
-  addLabels(issueNumber: number, labels: string[]): TE.TaskEither<DomainError, void>;
+  addLabels(issueNumber: number, labels: ReadonlyArray<string>): TE.TaskEither<DomainError, void>;
   removeLabel(issueNumber: number, label: string): TE.TaskEither<DomainError, void>;
   addComment(issueNumber: number, body: string): TE.TaskEither<DomainError, void>;
-  listIssueComments(issueNumber: number): TE.TaskEither<DomainError, string[]>;
-  ensureLabels(labels: readonly LabelDefinition[]): TE.TaskEither<DomainError, void>;
+  listIssueComments(issueNumber: number): TE.TaskEither<DomainError, ReadonlyArray<string>>;
+  ensureLabels(labels: ReadonlyArray<LabelDefinition>): TE.TaskEither<DomainError, void>;
   dispatchWorkflow(
     workflowFile: string,
     ref: string,
-    inputs: Record<string, string>,
+    inputs: Readonly<Record<string, string>>,
   ): TE.TaskEither<DomainError, void>;
 
   // Native GitHub Sub-issues & Dependencies
-  listSubIssues(issueNumber: number): TE.TaskEither<DomainError, number[]>;
+  listSubIssues(issueNumber: number): TE.TaskEither<DomainError, ReadonlyArray<number>>;
   addSubIssue(parentNumber: number, childNumber: number): TE.TaskEither<DomainError, void>;
-  listBlockedBy(issueNumber: number): TE.TaskEither<DomainError, IssueNode[]>;
-  listBlocking(issueNumber: number): TE.TaskEither<DomainError, number[]>;
+  listBlockedBy(issueNumber: number): TE.TaskEither<DomainError, ReadonlyArray<IssueNode>>;
+  listBlocking(issueNumber: number): TE.TaskEither<DomainError, ReadonlyArray<number>>;
   addBlockedBy(issueNumber: number, blockerNumber: number): TE.TaskEither<DomainError, void>;
 
   // Pull Requests
-  listOpenPrsForIssue(issueNumber: number): TE.TaskEither<DomainError, PullRequestSummary[]>;
-  listOpenAiManagedPrs(): TE.TaskEither<DomainError, ManagedPrSummary[]>;
+  listOpenPrsForIssue(issueNumber: number): TE.TaskEither<DomainError, ReadonlyArray<PullRequestSummary>>;
+  listOpenAiManagedPrs(): TE.TaskEither<DomainError, ReadonlyArray<ManagedPrSummary>>;
   createPullRequest(input: CreatePullRequestInput): TE.TaskEither<DomainError, PullRequestSummary>;
   mergePullRequest(prNumber: number, method: 'squash' | 'merge' | 'rebase'): TE.TaskEither<DomainError, void>;
   checkSetupPrerequisites(opts: {
-    prFlowOwner: string;
-    expectedLabels?: readonly LabelDefinition[];
-    secretName?: string;
-  }): TE.TaskEither<DomainError, PreflightCheckResult[]>;
+    readonly prFlowOwner: string;
+    readonly expectedLabels?: ReadonlyArray<LabelDefinition>;
+    readonly secretName?: string;
+  }): TE.TaskEither<DomainError, ReadonlyArray<PreflightCheckResult>>;
   addPrComment(prNumber: number, body: string): TE.TaskEither<DomainError, void>;
-  getPrReviewComments(prNumber: number): TE.TaskEither<DomainError, string[]>;
-  getPrReviewThreads(prNumber: number): TE.TaskEither<DomainError, PrReviewThread[]>;
+  getPrReviewComments(prNumber: number): TE.TaskEither<DomainError, ReadonlyArray<string>>;
+  getPrReviewThreads(prNumber: number): TE.TaskEither<DomainError, ReadonlyArray<PrReviewThread>>;
   getPrReviewFeedback(prNumber: number): TE.TaskEither<DomainError, PrReviewFeedback>;
   replyToReviewThread(threadId: string, body: string): TE.TaskEither<DomainError, void>;
   resolveReviewThread(threadId: string): TE.TaskEither<DomainError, void>;
-}
+};

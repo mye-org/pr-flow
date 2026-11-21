@@ -1,9 +1,15 @@
-import * as E from 'fp-ts/Either';
-import * as TE from 'fp-ts/TaskEither';
+import * as E from 'fp-ts/lib/Either';
+import { pipe } from 'fp-ts/lib/function';
+import * as RA from 'fp-ts/lib/ReadonlyArray';
+import * as TE from 'fp-ts/lib/TaskEither';
 import { describe, expect, it } from 'vitest';
 import type { GitHubPort } from '../src/adapters/github/types.js';
 import { parsePlanManifest } from '../src/domain/plan.js';
-import { formatIssueBody, ISSUE_DEVELOPMENT_STANDARDS, materializePlan } from '../src/planner/materialize.js';
+import {
+  formatIssueBody,
+  ISSUE_DEVELOPMENT_STANDARDS,
+  materializePlan,
+} from '../src/planner/materialize.js';
 import { topoSortPlan } from '../src/planner/topoSort.js';
 import { validatePlanDag } from '../src/planner/validateDag.js';
 
@@ -36,17 +42,18 @@ describe('planner DAG validation & topoSort', () => {
     expect(E.isRight(parsed)).toBe(true);
     if (E.isLeft(parsed)) return;
 
-    const validated = validatePlanDag(parsed.right);
-    expect(E.isRight(validated)).toBe(true);
+    expect(E.isRight(validatePlanDag(parsed.right))).toBe(true);
 
-    const sorted = topoSortPlan(parsed.right);
-    const ids = sorted.map((n) => n.id);
+    const ids = pipe(
+      topoSortPlan(parsed.right),
+      RA.map((n) => n.id),
+    );
     expect(ids.indexOf('story-core')).toBeLessThan(ids.indexOf('task-jwt'));
     expect(ids.indexOf('task-jwt')).toBeLessThan(ids.indexOf('task-middleware'));
   });
 
   it('rejects dependency cycles', () => {
-    const cyclic = `version: 1
+    const parsed = parsePlanManifest(`version: 1
 issues:
   - id: a
     title: A
@@ -56,8 +63,7 @@ issues:
     title: B
     type: task
     blockedBy: [a]
-`;
-    const parsed = parsePlanManifest(cyclic);
+`);
     expect(E.isRight(parsed)).toBe(true);
     if (E.isLeft(parsed)) return;
 
@@ -74,32 +80,31 @@ issues:
     if (E.isLeft(parsed)) return;
 
     let nextNum = 10;
-    const createdBodies: Array<{ title: string; body: string }> = [];
-    const subLinks: Array<[number, number]> = [];
-    const depLinks: Array<[number, number]> = [];
-    const statusUpdates: Array<[number, string]> = [];
+    let createdBodies: ReadonlyArray<{ readonly title: string; readonly body: string }> = [];
+    let subLinks: ReadonlyArray<readonly [number, number]> = [];
+    let depLinks: ReadonlyArray<readonly [number, number]> = [];
+    let statusUpdates: ReadonlyArray<readonly [number, string]> = [];
 
-    const mockGitHub: Partial<GitHubPort> = {
+    const res = await materializePlan(parsed.right, {
       createIssue: (input) => {
-        createdBodies.push({ title: input.title, body: input.body });
+        createdBodies = [...createdBodies, { title: input.title, body: input.body }];
         const num = nextNum++;
-        return TE.right({ number: num, url: `https://github.com/o/r/issues/${num}` });
+        return TE.right({ number: num, url: `https://github.com/o/r/issues/${String(num)}` });
       },
       setIssueStatus: (issueNumber, status) => {
-        statusUpdates.push([issueNumber, status]);
+        statusUpdates = [...statusUpdates, [issueNumber, status]];
         return TE.right(undefined);
       },
       addSubIssue: (parent, child) => {
-        subLinks.push([parent, child]);
+        subLinks = [...subLinks, [parent, child]];
         return TE.right(undefined);
       },
       addBlockedBy: (issue, blocker) => {
-        depLinks.push([issue, blocker]);
+        depLinks = [...depLinks, [issue, blocker]];
         return TE.right(undefined);
       },
-    };
+    } as Partial<GitHubPort> as GitHubPort)();
 
-    const res = await materializePlan(parsed.right, mockGitHub as GitHubPort)();
     expect(E.isRight(res)).toBe(true);
     if (E.isRight(res)) {
       expect(Object.keys(res.right.createdIssues)).toHaveLength(4);
@@ -107,11 +112,15 @@ issues:
       expect(subLinks).toHaveLength(3);
       expect(depLinks).toHaveLength(1);
       expect(createdBodies).toHaveLength(4);
-      for (const created of createdBodies) {
-        expect(created.body).toContain('declarative programming style');
-        expect(created.body).toContain('TypeScript type-driven development');
-        expect(created.body).toContain('functional programming style');
-      }
+      pipe(
+        createdBodies,
+        RA.map((created) => {
+          expect(created.body).toContain('declarative programming style');
+          expect(created.body).toContain('TypeScript type-driven development');
+          expect(created.body).toContain('functional programming style');
+          return undefined;
+        }),
+      );
       expect(createdBodies[0]?.body).toBe(`End-to-end auth\n\n${ISSUE_DEVELOPMENT_STANDARDS}`);
       expect(createdBodies[1]?.body).toBe(ISSUE_DEVELOPMENT_STANDARDS);
     }

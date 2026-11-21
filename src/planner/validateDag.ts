@@ -1,90 +1,173 @@
-import * as E from 'fp-ts/Either';
+import * as E from 'fp-ts/lib/Either';
+import { pipe } from 'fp-ts/lib/function';
+import * as O from 'fp-ts/lib/Option';
+import * as RA from 'fp-ts/lib/ReadonlyArray';
+import { match } from 'ts-pattern';
 import type { DomainError } from '../domain/errors.js';
-import type { PlanManifest } from '../domain/plan.js';
+import { isoMessage } from '../domain/newtypes.js';
+import type { PlanIssueNode, PlanManifest } from '../domain/plan.js';
+
+type DupAcc = {
+  readonly allIds: ReadonlySet<string>;
+  readonly errors: ReadonlyArray<string>;
+};
+
+const collectDuplicateErrors = (
+  issues: ReadonlyArray<PlanIssueNode>,
+  epicId: O.Option<string>,
+): DupAcc =>
+  pipe(
+    issues,
+    RA.reduce(
+      {
+        allIds: O.isSome(epicId) ? new Set<string>([epicId.value]) : new Set<string>(),
+        errors: [],
+      } satisfies DupAcc,
+      (acc: DupAcc, issue) => ({
+        allIds: new Set([...acc.allIds, issue.id]),
+        errors: acc.allIds.has(issue.id)
+          ? [...acc.errors, `Duplicate issue id '${issue.id}'`]
+          : acc.errors,
+      }),
+    ),
+  );
+
+const collectRefErrorsForIssue = (
+  issue: PlanIssueNode,
+  allIds: ReadonlySet<string>,
+): ReadonlyArray<string> => [
+  ...(issue.parentId && !allIds.has(issue.parentId)
+    ? [`Issue '${issue.id}' references unknown parentId '${issue.parentId}'`]
+    : []),
+  ...pipe(
+    issue.blockedBy,
+    RA.chain((dep) => [
+      ...(!allIds.has(dep) ? [`Issue '${issue.id}' references unknown blockedBy id '${dep}'`] : []),
+      ...(dep === issue.id ? [`Issue '${issue.id}' cannot be blocked by itself`] : []),
+    ]),
+  ),
+];
+
+const addDepsToAdj = (
+  adj: ReadonlyMap<string, ReadonlyArray<string>>,
+  issue: PlanIssueNode,
+): ReadonlyMap<string, ReadonlyArray<string>> =>
+  pipe(
+    issue.blockedBy,
+    RA.reduce(adj, (m, dep) => new Map(m).set(dep, [...(m.get(dep) ?? []), issue.id])),
+  );
+
+const buildAdjacency = (
+  allIds: ReadonlySet<string>,
+  issues: ReadonlyArray<PlanIssueNode>,
+): ReadonlyMap<string, ReadonlyArray<string>> =>
+  pipe(
+    issues,
+    RA.reduce(
+      new Map<string, ReadonlyArray<string>>(
+        pipe(Array.from(allIds), RA.map((id) => [id, []] as const)),
+      ),
+      addDepsToAdj,
+    ),
+  );
+
+type DfsResult = {
+  readonly visited: ReadonlySet<string>;
+  readonly cycle: O.Option<ReadonlyArray<string>>;
+};
+
+const dfsNeighbors = (
+  neighbors: ReadonlyArray<string>,
+  path: ReadonlyArray<string>,
+  visiting: ReadonlySet<string>,
+  visited: ReadonlySet<string>,
+  adj: ReadonlyMap<string, ReadonlyArray<string>>,
+): DfsResult =>
+  pipe(
+    neighbors,
+    RA.reduce({ visited, cycle: O.none }, (acc: DfsResult, next) =>
+      O.isSome(acc.cycle) ? acc : dfsNode(next, path, visiting, acc.visited, adj),
+    ),
+  );
+
+const exploreNode = (
+  nodeId: string,
+  path: ReadonlyArray<string>,
+  visiting: ReadonlySet<string>,
+  visited: ReadonlySet<string>,
+  adj: ReadonlyMap<string, ReadonlyArray<string>>,
+): DfsResult =>
+  pipe(
+    dfsNeighbors(adj.get(nodeId) ?? [], [...path, nodeId], new Set([...visiting, nodeId]), visited, adj),
+    (res) => ({ visited: new Set([...res.visited, nodeId]), cycle: res.cycle }),
+  );
+
+function dfsNode(
+  nodeId: string,
+  path: ReadonlyArray<string>,
+  visiting: ReadonlySet<string>,
+  visited: ReadonlySet<string>,
+  adj: ReadonlyMap<string, ReadonlyArray<string>>,
+): DfsResult {
+  if (visiting.has(nodeId)) return { visited, cycle: O.some([...path, nodeId]) };
+  if (visited.has(nodeId)) return { visited, cycle: O.none };
+  return exploreNode(nodeId, path, visiting, visited, adj);
+}
+
+const findCycle = (
+  allIds: ReadonlySet<string>,
+  adj: ReadonlyMap<string, ReadonlyArray<string>>,
+): O.Option<ReadonlyArray<string>> =>
+  pipe(
+    Array.from(allIds),
+    RA.reduce({ visited: new Set<string>(), cycle: O.none }, (acc: DfsResult, id) =>
+      O.isSome(acc.cycle) || acc.visited.has(id)
+        ? acc
+        : dfsNode(id, [], new Set<string>(), acc.visited, adj),
+    ),
+    (res) => res.cycle,
+  );
+
+const checkCycles = (
+  manifest: PlanManifest,
+  allIds: ReadonlySet<string>,
+): E.Either<DomainError, PlanManifest> =>
+  pipe(
+    findCycle(allIds, buildAdjacency(allIds, manifest.issues)),
+    O.match(
+      () => E.right(manifest),
+      (cycle) =>
+        E.left<DomainError, PlanManifest>({
+          type: 'PLAN_VALIDATION_ERROR',
+          message: isoMessage.wrap(`Dependency cycle detected: ${cycle.join(' -> ')}`),
+          details: O.some([isoMessage.wrap(cycle.join(' -> '))]),
+        }),
+    ),
+  );
+
+const validateReferences = (
+  manifest: PlanManifest,
+  allIds: ReadonlySet<string>,
+  dupErrors: ReadonlyArray<string>,
+): E.Either<DomainError, PlanManifest> =>
+  pipe(
+    [...dupErrors, ...pipe(manifest.issues, RA.chain((issue) => collectRefErrorsForIssue(issue, allIds)))],
+    (allErrors) =>
+      match(allErrors.length > 0)
+        .with(true, () =>
+          E.left<DomainError, PlanManifest>({
+            type: 'PLAN_VALIDATION_ERROR',
+            message: isoMessage.wrap('Plan manifest reference validation failed'),
+            details: O.some(pipe(allErrors, RA.map(isoMessage.wrap))),
+          }),
+        )
+        .with(false, () => checkCycles(manifest, allIds))
+        .exhaustive(),
+  );
 
 export function validatePlanDag(manifest: PlanManifest): E.Either<DomainError, PlanManifest> {
-  const errors: string[] = [];
-  const allIds = new Set<string>();
-
-  if (manifest.epic) {
-    allIds.add(manifest.epic.id);
-  }
-
-  for (const issue of manifest.issues) {
-    if (allIds.has(issue.id)) {
-      errors.push(`Duplicate issue id '${issue.id}'`);
-    }
-    allIds.add(issue.id);
-  }
-
-  // Validate parentId and blockedBy references exist
-  for (const issue of manifest.issues) {
-    if (issue.parentId && !allIds.has(issue.parentId)) {
-      errors.push(`Issue '${issue.id}' references unknown parentId '${issue.parentId}'`);
-    }
-    for (const dep of issue.blockedBy) {
-      if (!allIds.has(dep)) {
-        errors.push(`Issue '${issue.id}' references unknown blockedBy id '${dep}'`);
-      }
-      if (dep === issue.id) {
-        errors.push(`Issue '${issue.id}' cannot be blocked by itself`);
-      }
-    }
-  }
-
-  if (errors.length > 0) {
-    return E.left({
-      type: 'PLAN_VALIDATION_ERROR',
-      message: 'Plan manifest reference validation failed',
-      details: errors,
-    });
-  }
-
-  // Cycle detection on blockedBy + parentId edges using DFS 3-color marking
-  const adj = new Map<string, string[]>();
-  for (const id of allIds) {
-    adj.set(id, []);
-  }
-  for (const issue of manifest.issues) {
-    for (const dep of issue.blockedBy) {
-      adj.get(dep)?.push(issue.id);
-    }
-  }
-
-  const color = new Map<string, 'white' | 'gray' | 'black'>();
-  for (const id of allIds) {
-    color.set(id, 'white');
-  }
-
-  function hasCycle(nodeId: string, path: string[]): string[] | null {
-    color.set(nodeId, 'gray');
-    const neighbors = adj.get(nodeId) ?? [];
-    for (const next of neighbors) {
-      const c = color.get(next);
-      if (c === 'gray') {
-        return [...path, next];
-      }
-      if (c === 'white') {
-        const cycle = hasCycle(next, [...path, next]);
-        if (cycle) return cycle;
-      }
-    }
-    color.set(nodeId, 'black');
-    return null;
-  }
-
-  for (const id of allIds) {
-    if (color.get(id) === 'white') {
-      const cycle = hasCycle(id, [id]);
-      if (cycle) {
-        return E.left({
-          type: 'PLAN_VALIDATION_ERROR',
-          message: `Dependency cycle detected: ${cycle.join(' -> ')}`,
-          details: [cycle.join(' -> ')],
-        });
-      }
-    }
-  }
-
-  return E.right(manifest);
+  return pipe(
+    collectDuplicateErrors(manifest.issues, O.fromNullable(manifest.epic?.id)),
+    ({ allIds, errors }) => validateReferences(manifest, allIds, errors),
+  );
 }

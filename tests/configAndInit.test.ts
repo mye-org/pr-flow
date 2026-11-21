@@ -1,11 +1,32 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import * as E from 'fp-ts/Either';
+import * as E from 'fp-ts/lib/Either';
+import { pipe } from 'fp-ts/lib/function';
+import * as RA from 'fp-ts/lib/ReadonlyArray';
 import { describe, expect, it, vi } from 'vitest';
 import { OctokitGitHubAdapter } from '../src/adapters/github/client.js';
 import { generateInitFiles } from '../src/cli/init.js';
 import { parseConfig } from '../src/domain/config.js';
+import { isoHexColor, isoLabelName, isoMessage } from '../src/domain/newtypes.js';
+
+type MockOctokit = {
+  readonly graphql: () => Promise<object>;
+  readonly request: (route: string) => Promise<object>;
+  readonly rest: {
+    readonly pulls: {
+      readonly listReviews: () => Promise<object>;
+      readonly listReviewComments: () => Promise<object>;
+    };
+    readonly issues: {
+      readonly listLabelsForRepo: () => Promise<object>;
+      readonly listComments: () => Promise<object>;
+    };
+  };
+};
+
+const getOctokit = (adapter: OctokitGitHubAdapter): MockOctokit =>
+  Reflect.get(adapter, 'octokit') as MockOctokit;
 
 describe('parseConfig', () => {
   it('parses valid config with defaults', () => {
@@ -28,13 +49,16 @@ workspace:
   });
 
   it('rejects custom provider without agent.command', () => {
-    const res = parseConfig(`version: 1
+    expect(
+      E.isLeft(
+        parseConfig(`version: 1
 workspace:
   verifyCommand: "pytest"
 agent:
   provider: custom
-`);
-    expect(E.isLeft(res)).toBe(true);
+`),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -95,14 +119,7 @@ describe('OctokitGitHubAdapter.ensureStatusField', () => {
       owner: 'mye-org',
       repo: 'pr-flow-demo',
     });
-    const octokit = (
-      adapter as unknown as {
-        octokit: {
-          graphql: (...args: unknown[]) => Promise<unknown>;
-          request: (...args: unknown[]) => Promise<unknown>;
-        };
-      }
-    ).octokit;
+    const octokit = getOctokit(adapter);
     vi.spyOn(octokit, 'graphql').mockResolvedValueOnce({
       repository: {
         issueFields: {
@@ -127,9 +144,9 @@ describe('OctokitGitHubAdapter.ensureStatusField', () => {
     });
     const requestSpy = vi.spyOn(octokit, 'request');
 
-    const res = await adapter.ensureStatusField()();
-    expect(E.isRight(res)).toBe(true);
+    expect(E.isRight(await adapter.ensureStatusField()())).toBe(true);
     expect(requestSpy).not.toHaveBeenCalled();
+    expect(requestSpy.mock.calls).toHaveLength(0);
   });
 
   it('returns actionable remediation instructions on HTTP 403 when field does not exist', async () => {
@@ -138,14 +155,7 @@ describe('OctokitGitHubAdapter.ensureStatusField', () => {
       owner: 'mye-org',
       repo: 'pr-flow-demo',
     });
-    const octokit = (
-      adapter as unknown as {
-        octokit: {
-          graphql: (...args: unknown[]) => Promise<unknown>;
-          request: (...args: unknown[]) => Promise<unknown>;
-        };
-      }
-    ).octokit;
+    const octokit = getOctokit(adapter);
     vi.spyOn(octokit, 'graphql').mockResolvedValueOnce({
       repository: { issueFields: { nodes: [] } },
     });
@@ -158,9 +168,11 @@ describe('OctokitGitHubAdapter.ensureStatusField', () => {
     if (E.isLeft(res)) {
       expect(res.left.type).toBe('GITHUB_API_ERROR');
       if (res.left.type === 'GITHUB_API_ERROR') {
-        expect(res.left.message).toContain('HTTP 403');
-        expect(res.left.message).toContain('fields sync --repo mye-org/pr-flow-demo');
-        expect(res.left.message).toContain('https://github.com/organizations/mye-org/settings/issue-fields');
+        expect(isoMessage.unwrap(res.left.message)).toContain('HTTP 403');
+        expect(isoMessage.unwrap(res.left.message)).toContain('fields sync --repo mye-org/pr-flow-demo');
+        expect(isoMessage.unwrap(res.left.message)).toContain(
+          'https://github.com/organizations/mye-org/settings/issue-fields',
+        );
       }
     }
   });
@@ -171,14 +183,7 @@ describe('OctokitGitHubAdapter.ensureStatusField', () => {
       owner: 'personal-user',
       repo: 'demo',
     });
-    const octokit = (
-      adapter as unknown as {
-        octokit: {
-          graphql: (...args: unknown[]) => Promise<unknown>;
-          request: (...args: unknown[]) => Promise<unknown>;
-        };
-      }
-    ).octokit;
+    const octokit = getOctokit(adapter);
     vi.spyOn(octokit, 'graphql').mockResolvedValueOnce({
       repository: { issueFields: { nodes: [] } },
     });
@@ -191,8 +196,8 @@ describe('OctokitGitHubAdapter.ensureStatusField', () => {
     if (E.isLeft(res)) {
       expect(res.left.type).toBe('GITHUB_API_ERROR');
       if (res.left.type === 'GITHUB_API_ERROR') {
-        expect(res.left.message).toContain('HTTP 404');
-        expect(res.left.message).toContain('GitHub Organization');
+        expect(isoMessage.unwrap(res.left.message)).toContain('HTTP 404');
+        expect(isoMessage.unwrap(res.left.message)).toContain('GitHub Organization');
       }
     }
   });
@@ -205,34 +210,22 @@ describe('OctokitGitHubAdapter.checkSetupPrerequisites', () => {
       owner: 'mye-org',
       repo: 'pr-flow-demo',
     });
-    const octokit = (
-      adapter as unknown as {
-        octokit: {
-          graphql: (...args: unknown[]) => Promise<unknown>;
-          request: (route: string, ...args: unknown[]) => Promise<unknown>;
-          rest: {
-            issues: {
-              listLabelsForRepo: (...args: unknown[]) => Promise<unknown>;
-            };
-          };
-        };
-      }
-    ).octokit;
+    const octokit = getOctokit(adapter);
 
-    vi.spyOn(octokit, 'request').mockImplementation(async (route: string) => {
+    vi.spyOn(octokit, 'request').mockImplementation((route: string) => {
       if (route === 'GET /repos/{owner}/{repo}') {
-        return { data: { private: false } };
+        return Promise.resolve({ data: { private: false } });
       }
       if (route === 'GET /repos/{owner}/{repo}/actions/permissions/workflow') {
-        return { data: { can_approve_pull_request_reviews: true } };
+        return Promise.resolve({ data: { can_approve_pull_request_reviews: true } });
       }
       if (route === 'GET /repos/{owner}/{repo}/labels') {
-        return { data: [{ name: 'type:epic' }, { name: 'type:task' }] };
+        return Promise.resolve({ data: [{ name: 'type:epic' }, { name: 'type:task' }] });
       }
       if (route === 'GET /repos/{owner}/{repo}/actions/secrets/{secret_name}') {
-        return { data: { name: 'GEMINI_API_KEY' } };
+        return Promise.resolve({ data: { name: 'GEMINI_API_KEY' } });
       }
-      throw new Error(`Unexpected route: ${route}`);
+      return Promise.reject(new Error(`Unexpected route: ${route}`));
     });
 
     vi.spyOn(octokit, 'graphql').mockResolvedValueOnce({
@@ -261,15 +254,28 @@ describe('OctokitGitHubAdapter.checkSetupPrerequisites', () => {
     const res = await adapter.checkSetupPrerequisites({
       prFlowOwner: 'mye-org',
       expectedLabels: [
-        { name: 'type:epic', color: '3e4b9e', description: 'Epic' },
-        { name: 'type:task', color: '006b75', description: 'Task' },
+        {
+          name: isoLabelName.wrap('type:epic'),
+          color: isoHexColor.wrap('3e4b9e'),
+          description: isoMessage.wrap('Epic'),
+        },
+        {
+          name: isoLabelName.wrap('type:task'),
+          color: isoHexColor.wrap('006b75'),
+          description: isoMessage.wrap('Task'),
+        },
       ],
     })();
 
     expect(E.isRight(res)).toBe(true);
     if (E.isRight(res)) {
       expect(res.right).toHaveLength(5);
-      expect(res.right.every((c) => c.status === 'pass')).toBe(true);
+      expect(
+        pipe(
+          res.right,
+          RA.every((c) => c.status === 'pass'),
+        ),
+      ).toBe(true);
     }
   });
 
@@ -279,29 +285,22 @@ describe('OctokitGitHubAdapter.checkSetupPrerequisites', () => {
       owner: 'mye-org',
       repo: 'pr-flow-demo',
     });
-    const octokit = (
-      adapter as unknown as {
-        octokit: {
-          graphql: (...args: unknown[]) => Promise<unknown>;
-          request: (route: string, ...args: unknown[]) => Promise<unknown>;
-        };
-      }
-    ).octokit;
+    const octokit = getOctokit(adapter);
 
-    vi.spyOn(octokit, 'request').mockImplementation(async (route: string) => {
+    vi.spyOn(octokit, 'request').mockImplementation((route: string) => {
       if (route === 'GET /repos/{owner}/{repo}') {
-        return { data: { private: true } };
+        return Promise.resolve({ data: { private: true } });
       }
       if (route === 'GET /repos/{owner}/{repo}/actions/permissions/workflow') {
-        return { data: { can_approve_pull_request_reviews: false } };
+        return Promise.resolve({ data: { can_approve_pull_request_reviews: false } });
       }
       if (route === 'GET /repos/{owner}/{repo}/labels') {
-        return { data: [] };
+        return Promise.resolve({ data: [] });
       }
       if (route === 'GET /repos/{owner}/{repo}/actions/secrets/{secret_name}') {
-        throw Object.assign(new Error('Not Found'), { status: 404 });
+        return Promise.reject(Object.assign(new Error('Not Found'), { status: 404 }));
       }
-      throw new Error(`Unexpected route: ${route}`);
+      return Promise.reject(new Error(`Unexpected route: ${route}`));
     });
 
     vi.spyOn(octokit, 'graphql').mockResolvedValueOnce({
@@ -310,15 +309,28 @@ describe('OctokitGitHubAdapter.checkSetupPrerequisites', () => {
 
     const res = await adapter.checkSetupPrerequisites({
       prFlowOwner: 'mye-org',
-      expectedLabels: [{ name: 'type:task', color: '006b75', description: 'Task' }],
+      expectedLabels: [
+        {
+          name: isoLabelName.wrap('type:task'),
+          color: isoHexColor.wrap('006b75'),
+          description: isoMessage.wrap('Task'),
+        },
+      ],
     })();
 
     expect(E.isRight(res)).toBe(true);
     if (E.isRight(res)) {
-      const byName = new Map(res.right.map((c) => [c.name, c]));
+      const byName = new Map(
+        pipe(
+          res.right,
+          RA.map((c) => [c.name, c] as const),
+        ),
+      );
       expect(byName.get('pr-flow repository visibility')?.status).toBe('warn');
       expect(byName.get('Actions PR permissions')?.status).toBe('fail');
-      expect(byName.get('Actions PR permissions')?.remediation).toContain('can_approve_pull_request_reviews=true');
+      expect(byName.get('Actions PR permissions')?.remediation).toContain(
+        'can_approve_pull_request_reviews=true',
+      );
       expect(byName.get('pr-flow-status Issue Field')?.status).toBe('fail');
       expect(byName.get('Required labels')?.status).toBe('fail');
       expect(byName.get('Actions secret (GEMINI_API_KEY)')?.status).toBe('fail');
@@ -333,22 +345,7 @@ describe('OctokitGitHubAdapter.getPrReviewComments', () => {
       owner: 'mye-org',
       repo: 'pr-flow-demo',
     });
-    const octokit = (
-      adapter as unknown as {
-        octokit: {
-          graphql: (...args: unknown[]) => Promise<unknown>;
-          rest: {
-            pulls: {
-              listReviews: (...args: unknown[]) => Promise<unknown>;
-              listReviewComments: (...args: unknown[]) => Promise<unknown>;
-            };
-            issues: {
-              listComments: (...args: unknown[]) => Promise<unknown>;
-            };
-          };
-        };
-      }
-    ).octokit;
+    const octokit = getOctokit(adapter);
 
     vi.spyOn(octokit.rest.pulls, 'listReviews').mockResolvedValueOnce({
       data: [
@@ -445,4 +442,3 @@ describe('OctokitGitHubAdapter.getPrReviewComments', () => {
     }
   });
 });
-

@@ -1,10 +1,20 @@
-import * as E from 'fp-ts/Either';
-import * as TE from 'fp-ts/TaskEither';
+import * as O from 'fp-ts/lib/Option';
+import * as TE from 'fp-ts/lib/TaskEither';
 import { describe, expect, it, vi } from 'vitest';
 import { buildReviewPrompt } from '../src/adapters/agent/prompts.js';
 import type { GitHubPort, PrReviewThread } from '../src/adapters/github/types.js';
 import { replyAndResolveReviewThreads } from '../src/cli/reviewFollowUp.js';
-import { AgentResultSchema, type AgentResult, type IssueNode } from '../src/domain/issue.js';
+import { AgentResultSchema, type IssueNode } from '../src/domain/issue.js';
+import {
+  isoCount,
+  isoBody,
+  isoIsoTimestamp,
+  isoIssueNumber,
+  isoLabelName,
+  isoMessage,
+  isoPrNumber,
+  isoTitle,
+} from '../src/domain/newtypes.js';
 
 function createMockGithub(overrides: Partial<GitHubPort> = {}): GitHubPort {
   return {
@@ -42,53 +52,54 @@ function createMockGithub(overrides: Partial<GitHubPort> = {}): GitHubPort {
 }
 
 const sampleIssue: IssueNode = {
-  number: 12,
-  title: 'Handle edge cases in parser',
-  body: 'Fix null input handling',
+  number: isoIssueNumber.wrap(12),
+  title: isoTitle.wrap('Handle edge cases in parser'),
+  body: isoBody.wrap('Fix null input handling'),
   state: 'open',
   status: 'review_pending',
   type: 'bug',
-  labels: ['type:bug', 'ai-managed'],
+  labels: [isoLabelName.wrap('type:bug'), isoLabelName.wrap('ai-managed')],
   subIssueNumbers: [],
   blockedByNumbers: [],
   blockingNumbers: [],
-  linkedPrNumber: 34,
-  parentNumber: null,
-  updatedAt: '2026-01-01T00:00:00Z',
+  linkedPrNumber: O.some(isoPrNumber.wrap(34)),
+  parentNumber: O.none,
+  updatedAt: isoIsoTimestamp.wrap('2026-01-01T00:00:00Z'),
 };
 
-const sampleThreads: PrReviewThread[] = [
-  {
-    threadId: 'PRRT_thread_1',
-    isResolved: false,
-    isOutdated: false,
-    path: 'src/parser.ts',
-    line: 42,
-    comments: [
-      {
-        id: 'PRRC_1',
-        databaseId: 101,
-        author: 'alice',
-        body: 'Please guard against empty strings here.',
-      },
-    ],
-  },
-  {
-    threadId: 'PRRT_thread_2',
-    isResolved: false,
-    isOutdated: false,
-    path: 'tests/parser.test.ts',
-    line: 15,
-    comments: [
-      {
-        id: 'PRRC_2',
-        databaseId: 102,
-        author: 'bob',
-        body: 'Add a unit test for empty input.',
-      },
-    ],
-  },
-];
+const firstThread: PrReviewThread = {
+  threadId: 'PRRT_thread_1',
+  isResolved: false,
+  isOutdated: false,
+  path: 'src/parser.ts',
+  line: 42,
+  comments: [
+    {
+      id: 'PRRC_1',
+      databaseId: 101,
+      author: 'alice',
+      body: 'Please guard against empty strings here.',
+    },
+  ],
+};
+
+const secondThread: PrReviewThread = {
+  threadId: 'PRRT_thread_2',
+  isResolved: false,
+  isOutdated: false,
+  path: 'tests/parser.test.ts',
+  line: 15,
+  comments: [
+    {
+      id: 'PRRC_2',
+      databaseId: 102,
+      author: 'bob',
+      body: 'Add a unit test for empty input.',
+    },
+  ],
+};
+
+const sampleThreads: ReadonlyArray<PrReviewThread> = [firstThread, secondThread];
 
 describe('AgentResultSchema', () => {
   it('accepts optional resolvedComments array', () => {
@@ -132,25 +143,22 @@ describe('replyAndResolveReviewThreads', () => {
   it('replies with thread-specific fix explanations and resolves each unresolved thread', async () => {
     const replyToReviewThread = vi.fn().mockReturnValue(TE.right(undefined));
     const resolveReviewThread = vi.fn().mockReturnValue(TE.right(undefined));
-    const github = createMockGithub({ replyToReviewThread, resolveReviewThread });
 
-    const agentResult: AgentResult = {
-      status: 'success',
-      summary: 'Added empty string guard and unit test.',
-      testsRun: true,
-      resolvedComments: [
-        { threadId: 'PRRT_thread_1', reply: 'Added an early return when input is empty.' },
-      ],
-    };
-
-    const res = await replyAndResolveReviewThreads({
-      github,
-      branch: 'ai/issue-12',
-      agentResult,
-      threads: sampleThreads,
-    });
-
-    expect(res).toEqual({
+    expect(
+      await replyAndResolveReviewThreads({
+        github: createMockGithub({ replyToReviewThread, resolveReviewThread }),
+        branch: 'ai/issue-12',
+        agentResult: {
+          status: 'success',
+          summary: 'Added empty string guard and unit test.',
+          testsRun: true,
+          resolvedComments: [
+            { threadId: 'PRRT_thread_1', reply: 'Added an early return when input is empty.' },
+          ],
+        },
+        threads: sampleThreads,
+      }),
+    ).toEqual({
       repliedCount: 2,
       resolvedCount: 2,
       warnings: [],
@@ -173,30 +181,36 @@ describe('replyAndResolveReviewThreads', () => {
   it('skips already-resolved threads', async () => {
     const replyToReviewThread = vi.fn().mockReturnValue(TE.right(undefined));
     const resolveReviewThread = vi.fn().mockReturnValue(TE.right(undefined));
-    const github = createMockGithub({ replyToReviewThread, resolveReviewThread });
 
-    const res = await replyAndResolveReviewThreads({
-      github,
-      branch: 'ai/issue-12',
-      agentResult: { status: 'success', summary: 'Fixed' },
-      threads: [{ ...sampleThreads[0]!, isResolved: true }, sampleThreads[1]!],
-    });
-
-    expect(res).toEqual({ repliedCount: 1, resolvedCount: 1, warnings: [] });
+    expect(
+      await replyAndResolveReviewThreads({
+        github: createMockGithub({ replyToReviewThread, resolveReviewThread }),
+        branch: 'ai/issue-12',
+        agentResult: { status: 'success', summary: 'Fixed' },
+        threads: [{ ...firstThread, isResolved: true }, secondThread],
+      }),
+    ).toEqual({ repliedCount: 1, resolvedCount: 1, warnings: [] });
     expect(replyToReviewThread).toHaveBeenCalledTimes(1);
     expect(resolveReviewThread).toHaveBeenCalledWith('PRRT_thread_2');
   });
 
   it('records warnings and continues if replying or resolving fails for a thread', async () => {
-    const replyToReviewThread = vi
-      .fn()
-      .mockReturnValueOnce(TE.left({ type: 'GITHUB_API_ERROR', message: 'Not found' }))
-      .mockReturnValueOnce(TE.right(undefined));
     const resolveReviewThread = vi.fn().mockReturnValue(TE.right(undefined));
-    const github = createMockGithub({ replyToReviewThread, resolveReviewThread });
-
     const res = await replyAndResolveReviewThreads({
-      github,
+      github: createMockGithub({
+        replyToReviewThread: vi
+          .fn()
+          .mockReturnValueOnce(
+            TE.left({
+              type: 'GITHUB_API_ERROR',
+              message: isoMessage.wrap('Not found'),
+              status: O.some(isoCount.wrap(404)),
+              cause: O.none,
+            }),
+          )
+          .mockReturnValueOnce(TE.right(undefined)),
+        resolveReviewThread,
+      }),
       branch: 'ai/issue-12',
       agentResult: { status: 'success', summary: 'Fixed' },
       threads: sampleThreads,

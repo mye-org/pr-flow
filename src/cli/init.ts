@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-export interface InitOptions {
+export type InitOptions = {
   targetDir: string;
   prFlowOwner: string;
   prFlowRef: string;
@@ -13,27 +13,26 @@ export interface InitOptions {
   force: boolean;
 }
 
-export interface InitResult {
-  written: string[];
-  skipped: string[];
-}
+export type InitResult = {
+  readonly written: ReadonlyArray<string>;
+  readonly skipped: ReadonlyArray<string>;
+};
 
-function writeIfAllowed(filePath: string, content: string, force: boolean, result: InitResult): void {
+function writeIfAllowed(filePath: string, content: string, force: boolean, result: InitResult): InitResult {
   if (fs.existsSync(filePath) && !force) {
-    result.skipped.push(filePath);
-    return;
+    return { written: result.written, skipped: [...result.skipped, filePath] };
   }
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, content, 'utf-8');
-  result.written.push(filePath);
+  return { written: [...result.written, filePath], skipped: result.skipped };
 }
 
 export function generateInitFiles(opts: InitOptions): InitResult {
-  const result: InitResult = { written: [], skipped: [] };
+  let result: InitResult = { written: [], skipped: [] };
   const usesPrefix = `${opts.prFlowOwner}/pr-flow/.github/workflows`;
 
   const configContent = `version: 1
-wipLimit: ${opts.wipLimit}
+wipLimit: ${String(opts.wipLimit)}
 baseBranch: ${opts.baseBranch}
 
 workspace:
@@ -270,7 +269,7 @@ Issues use the \`pr-flow-status\` organization Single-Select Issue Field with va
 \`backlog\`, \`blocked-dep\`, \`ready\`, \`in-progress\`, \`review-pending\`, \`fixed\`, \`needs-human\`.
 
 - **Triggering execution:** Setting \`pr-flow-status\` to \`ready\` on an unblocked leaf task triggers \`pr-flow-implement.yml\` (or run \`gh workflow run pr-flow-implement.yml -f issue_number=<NUMBER>\`).
-- **WIP limit:** Only \`in-progress\` issues count toward \`wipLimit\` (default: ${opts.wipLimit}). \`review-pending\` is **uncapped** so code review never blocks new work.
+- **WIP limit:** Only \`in-progress\` issues count toward \`wipLimit\` (default: ${String(opts.wipLimit)}). \`review-pending\` is **uncapped** so code review never blocks new work.
 - **Parent rollup precedence:** Container status rolls up automatically from children in strict order:
   1. Any child \`needs-human\` → \`needs-human\`
   2. All children \`fixed\` → \`fixed\` (and closes parent)
@@ -299,33 +298,33 @@ Issues use the \`pr-flow-status\` organization Single-Select Issue Field with va
    - Approve & auto-merge: \`gh pr review <PR_NUMBER> --approve --body "LGTM!"\`
 `;
 
-  writeIfAllowed(path.join(opts.targetDir, 'pr-flow.config.yml'), configContent, opts.force, result);
-  writeIfAllowed(path.join(opts.targetDir, 'AGENTS.md'), agentsMdContent, opts.force, result);
-  writeIfAllowed(
+  result = writeIfAllowed(path.join(opts.targetDir, 'pr-flow.config.yml'), configContent, opts.force, result);
+  result = writeIfAllowed(path.join(opts.targetDir, 'AGENTS.md'), agentsMdContent, opts.force, result);
+  result = writeIfAllowed(
     path.join(opts.targetDir, '.agents/skills/pr-flow/SKILL.md'),
     skillMdContent,
     opts.force,
     result,
   );
-  writeIfAllowed(
+  result = writeIfAllowed(
     path.join(opts.targetDir, '.github/workflows/pr-flow-implement.yml'),
     implementWorkflow,
     opts.force,
     result,
   );
-  writeIfAllowed(
+  result = writeIfAllowed(
     path.join(opts.targetDir, '.github/workflows/pr-flow-review.yml'),
     reviewWorkflow,
     opts.force,
     result,
   );
-  writeIfAllowed(
+  result = writeIfAllowed(
     path.join(opts.targetDir, '.github/workflows/pr-flow-sync.yml'),
     syncWorkflow,
     opts.force,
     result,
   );
-  writeIfAllowed(
+  result = writeIfAllowed(
     path.join(opts.targetDir, '.github/workflows/pr-flow-reconcile.yml'),
     reconcileWorkflow,
     opts.force,

@@ -1,36 +1,93 @@
+import { pipe } from 'fp-ts/lib/function';
+import type * as O from 'fp-ts/lib/Option';
+import * as RA from 'fp-ts/lib/ReadonlyArray';
+import { match } from 'ts-pattern';
 import type { IssueStatus, IssueType } from './issue.js';
+import {
+  type Count,
+  isoCount,
+  isoIssueNumber,
+  isoMessage,
+  type IssueNumber,
+  type Message,
+} from './newtypes.js';
+
+export type Retryability = 'retryable' | 'fatal';
 
 export type GuardError =
-  | { type: 'WIP_LIMIT_REACHED'; currentWip: number; limit: number }
-  | { type: 'BLOCKED_BY_DEPENDENCIES'; blockingIssues: number[] }
+  | { readonly type: 'WIP_LIMIT_REACHED'; readonly currentWip: Count; readonly limit: Count }
+  | { readonly type: 'BLOCKED_BY_DEPENDENCIES'; readonly blockingIssues: ReadonlyArray<IssueNumber> }
   | {
-      type: 'NOT_AN_EXECUTABLE_LEAF';
-      issueNumber: number;
-      issueType: IssueType;
-      subIssueCount: number;
+      readonly type: 'NOT_AN_EXECUTABLE_LEAF';
+      readonly issueNumber: IssueNumber;
+      readonly issueType: IssueType;
+      readonly subIssueCount: Count;
     }
-  | { type: 'PR_ALREADY_EXISTS'; issueNumber: number; existingPrCount: number }
-  | { type: 'INVALID_STATE_FOR_PICKUP'; issueNumber: number; currentStatus: IssueStatus };
+  | {
+      readonly type: 'PR_ALREADY_EXISTS';
+      readonly issueNumber: IssueNumber;
+      readonly existingPrCount: Count;
+    }
+  | {
+      readonly type: 'INVALID_STATE_FOR_PICKUP';
+      readonly issueNumber: IssueNumber;
+      readonly currentStatus: IssueStatus;
+    };
 
 export type DomainError =
-  | { type: 'CONFIG_ERROR'; message: string }
-  | { type: 'PLAN_VALIDATION_ERROR'; message: string; details?: string[] }
-  | { type: 'GITHUB_API_ERROR'; message: string; status?: number; cause?: unknown }
-  | { type: 'AGENT_EXECUTION_ERROR'; message: string; exitCode?: number; retryable?: boolean }
-  | { type: 'GUARD_ERROR'; guard: GuardError }
-  | { type: 'GIT_ERROR'; message: string };
+  | { readonly type: 'CONFIG_ERROR'; readonly message: Message }
+  | {
+      readonly type: 'PLAN_VALIDATION_ERROR';
+      readonly message: Message;
+      readonly details: O.Option<ReadonlyArray<Message>>;
+    }
+  | {
+      readonly type: 'GITHUB_API_ERROR';
+      readonly message: Message;
+      readonly status: O.Option<Count>;
+      readonly cause: O.Option<Message>;
+    }
+  | {
+      readonly type: 'AGENT_EXECUTION_ERROR';
+      readonly message: Message;
+      readonly exitCode: O.Option<Count>;
+      readonly retryability: O.Option<Retryability>;
+    }
+  | { readonly type: 'GUARD_ERROR'; readonly guard: GuardError }
+  | { readonly type: 'GIT_ERROR'; readonly message: Message };
 
-export function formatGuardError(err: GuardError): string {
-  switch (err.type) {
-    case 'WIP_LIMIT_REACHED':
-      return `WIP limit reached (${err.currentWip}/${err.limit} issues currently in progress).`;
-    case 'BLOCKED_BY_DEPENDENCIES':
-      return `Issue is blocked by open dependencies: ${err.blockingIssues.map((n) => `#${n}`).join(', ')}.`;
-    case 'NOT_AN_EXECUTABLE_LEAF':
-      return `Issue #${err.issueNumber} (type=${err.issueType}, subIssues=${err.subIssueCount}) is a container, not an executable leaf.`;
-    case 'PR_ALREADY_EXISTS':
-      return `Issue #${err.issueNumber} already has ${err.existingPrCount} open PR(s) (1-PR-per-issue rule).`;
-    case 'INVALID_STATE_FOR_PICKUP':
-      return `Issue #${err.issueNumber} is in state '${err.currentStatus}', which cannot be picked up automatically.`;
-  }
+const formatWipLimit = (e: Extract<GuardError, { readonly type: 'WIP_LIMIT_REACHED' }>): string =>
+  `WIP limit reached (${String(isoCount.unwrap(e.currentWip))}/${String(isoCount.unwrap(e.limit))} issues currently in progress).`;
+
+const formatBlockedDeps = (
+  e: Extract<GuardError, { readonly type: 'BLOCKED_BY_DEPENDENCIES' }>,
+): string =>
+  `Issue is blocked by open dependencies: ${pipe(
+    e.blockingIssues,
+    RA.map((n) => `#${String(isoIssueNumber.unwrap(n))}`),
+  ).join(', ')}.`;
+
+const formatNotLeaf = (
+  e: Extract<GuardError, { readonly type: 'NOT_AN_EXECUTABLE_LEAF' }>,
+): string =>
+  `Issue #${String(isoIssueNumber.unwrap(e.issueNumber))} (type=${e.issueType}, subIssues=${String(isoCount.unwrap(e.subIssueCount))}) is a container, not an executable leaf.`;
+
+const formatPrExists = (e: Extract<GuardError, { readonly type: 'PR_ALREADY_EXISTS' }>): string =>
+  `Issue #${String(isoIssueNumber.unwrap(e.issueNumber))} already has ${String(isoCount.unwrap(e.existingPrCount))} open PR(s) (1-PR-per-issue rule).`;
+
+const formatInvalidState = (
+  e: Extract<GuardError, { readonly type: 'INVALID_STATE_FOR_PICKUP' }>,
+): string =>
+  `Issue #${String(isoIssueNumber.unwrap(e.issueNumber))} is in state '${e.currentStatus}', which cannot be picked up automatically.`;
+
+export function formatGuardError(err: GuardError): Message {
+  return isoMessage.wrap(
+    match(err)
+      .with({ type: 'WIP_LIMIT_REACHED' }, formatWipLimit)
+      .with({ type: 'BLOCKED_BY_DEPENDENCIES' }, formatBlockedDeps)
+      .with({ type: 'NOT_AN_EXECUTABLE_LEAF' }, formatNotLeaf)
+      .with({ type: 'PR_ALREADY_EXISTS' }, formatPrExists)
+      .with({ type: 'INVALID_STATE_FOR_PICKUP' }, formatInvalidState)
+      .exhaustive(),
+  );
 }

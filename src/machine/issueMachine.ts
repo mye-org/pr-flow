@@ -1,48 +1,63 @@
-import { assign, getNextSnapshot, setup } from 'xstate';
+import * as O from 'fp-ts/lib/Option';
+import { assign, setup, transition } from 'xstate';
 import type { Effect } from '../domain/effects.js';
 import type { IssueEvent } from '../domain/events.js';
 import type { IssueNode, IssueStatus } from '../domain/issue.js';
+import {
+  type Body,
+  isoBody,
+  isoBranchName,
+  isoCount,
+  isoMessage,
+  isoPrNumber,
+  type IssueNumber,
+} from '../domain/newtypes.js';
 
-export interface IssueMachineContext {
-  issueNumber: number;
-  effects: Effect[];
-}
+export type IssueMachineContext = {
+  readonly issueNumber: IssueNumber;
+  readonly effects: ReadonlyArray<Effect>;
+};
 
-function appendEffect(effects: Effect[], next: Effect): Effect[] {
+function appendEffect(effects: ReadonlyArray<Effect>, next: Effect): ReadonlyArray<Effect> {
   return [...effects, next];
 }
+
+const hasPickupCapacity = (
+  e: Extract<IssueEvent, { readonly type: 'PICKUP_REQUESTED' }>,
+): boolean =>
+  e.leafKind === 'leaf' &&
+  e.blockerState === 'all_closed' &&
+  isoCount.unwrap(e.openPrCount) === 0 &&
+  isoCount.unwrap(e.wipCount) < isoCount.unwrap(e.wipLimit);
+
+const canPickupEvent = (event: IssueEvent): boolean =>
+  event.type === 'PICKUP_REQUESTED' ? hasPickupCapacity(event) : false;
+
+const canRetryEvent = (event: IssueEvent): boolean =>
+  event.type === 'TRANSIENT_EXECUTION_FAILED'
+    ? isoCount.unwrap(event.retryCount) < isoCount.unwrap(event.maxRetries)
+    : false;
 
 export const issueMachine = setup({
   types: {
     context: {} as IssueMachineContext,
     events: {} as IssueEvent,
-    input: {} as { issueNumber: number },
+    input: {} as { readonly issueNumber: IssueNumber },
   },
   guards: {
-    canPickup: ({ event }) => {
-      if (event.type !== 'PICKUP_REQUESTED') return false;
-      return (
-        event.isLeaf &&
-        event.allBlockersClosed &&
-        event.openPrCount === 0 &&
-        event.wipCount < event.wipLimit
-      );
-    },
-    canRetry: ({ event }) => {
-      if (event.type !== 'TRANSIENT_EXECUTION_FAILED') return false;
-      return event.retryCount < event.maxRetries;
-    },
+    canPickup: ({ event }) => canPickupEvent(event),
+    canRetry: ({ event }) => canRetryEvent(event),
   },
   actions: {
-    emitStatusFieldSet: assign(({ context }, params: { from: IssueStatus; to: IssueStatus }) => ({
+    emitStatusFieldSet: assign(({ context }, params: { readonly from: IssueStatus; readonly to: IssueStatus }) => ({
       effects: appendEffect(context.effects, {
         type: 'SET_STATUS_FIELD',
         issueNumber: context.issueNumber,
-        from: params.from,
+        from: O.some(params.from),
         to: params.to,
       }),
     })),
-    emitComment: assign(({ context }, params: { body: string }) => ({
+    emitComment: assign(({ context }, params: { readonly body: Body }) => ({
       effects: appendEffect(context.effects, {
         type: 'ADD_COMMENT',
         issueNumber: context.issueNumber,
@@ -90,7 +105,11 @@ export const issueMachine = setup({
             { type: 'emitStatusFieldSet', params: { from: 'blocked_dep', to: 'ready' } },
             {
               type: 'emitComment',
-              params: { body: 'All upstream dependencies are closed. Issue `pr-flow-status` is now `ready`.' },
+              params: {
+                body: isoBody.wrap(
+                  'All upstream dependencies are closed. Issue `pr-flow-status` is now `ready`.',
+                ),
+              },
             },
           ],
         },
@@ -121,7 +140,9 @@ export const issueMachine = setup({
               effects: appendEffect(context.effects, {
                 type: 'ADD_COMMENT',
                 issueNumber: context.issueNumber,
-                body: `PR #${event.prNumber} opened on branch \`${event.branch}\`.\n\n**Summary:** ${event.summary}`,
+                body: isoBody.wrap(
+                  `PR #${String(isoPrNumber.unwrap(event.prNumber))} opened on branch \`${isoBranchName.unwrap(event.branch)}\`.\n\n**Summary:** ${isoMessage.unwrap(event.summary)}`,
+                ),
               }),
             })),
           ],
@@ -134,7 +155,9 @@ export const issueMachine = setup({
               effects: appendEffect(context.effects, {
                 type: 'ADD_COMMENT',
                 issueNumber: context.issueNumber,
-                body: `Automated execution failed and requires human intervention.\n\n**Reason:** ${event.reason}`,
+                body: isoBody.wrap(
+                  `Automated execution failed and requires human intervention.\n\n**Reason:** ${isoMessage.unwrap(event.reason)}`,
+                ),
               }),
             })),
           ],
@@ -149,7 +172,9 @@ export const issueMachine = setup({
                 effects: appendEffect(context.effects, {
                   type: 'ADD_COMMENT',
                   issueNumber: context.issueNumber,
-                  body: `<!-- pr-flow:retries=${event.retryCount + 1} -->\nTransient agent API error (attempt ${event.retryCount + 1}/${event.maxRetries}); re-queued \`pr-flow-status\` to \`ready\` for automatic retry.\n\n**Reason:** ${event.reason}`,
+                  body: isoBody.wrap(
+                    `<!-- pr-flow:retries=${String(isoCount.unwrap(event.retryCount) + 1)} -->\nTransient agent API error (attempt ${String(isoCount.unwrap(event.retryCount) + 1)}/${String(isoCount.unwrap(event.maxRetries))}); re-queued \`pr-flow-status\` to \`ready\` for automatic retry.\n\n**Reason:** ${isoMessage.unwrap(event.reason)}`,
+                  ),
                 }),
               })),
             ],
@@ -162,7 +187,9 @@ export const issueMachine = setup({
                 effects: appendEffect(context.effects, {
                   type: 'ADD_COMMENT',
                   issueNumber: context.issueNumber,
-                  body: `Automated execution failed after ${event.maxRetries} transient retries and requires human intervention.\n\n**Reason:** ${event.reason}`,
+                  body: isoBody.wrap(
+                    `Automated execution failed after ${String(isoCount.unwrap(event.maxRetries))} transient retries and requires human intervention.\n\n**Reason:** ${isoMessage.unwrap(event.reason)}`,
+                  ),
                 }),
               })),
             ],
@@ -176,7 +203,9 @@ export const issueMachine = setup({
               effects: appendEffect(context.effects, {
                 type: 'ADD_COMMENT',
                 issueNumber: context.issueNumber,
-                body: `AI agent requested human clarification.\n\n**Reason:** ${event.reason}`,
+                body: isoBody.wrap(
+                  `AI agent requested human clarification.\n\n**Reason:** ${isoMessage.unwrap(event.reason)}`,
+                ),
               }),
             })),
           ],
@@ -204,7 +233,9 @@ export const issueMachine = setup({
               effects: appendEffect(context.effects, {
                 type: 'ADD_COMMENT',
                 issueNumber: context.issueNumber,
-                body: `<!-- pr-flow:retries=${event.retryCount + 1} -->\nTransient agent API error during review follow-up (attempt ${event.retryCount + 1}/${event.maxRetries}); keeping \`pr-flow-status\` in \`review-pending\`.\n\n**Reason:** ${event.reason}`,
+                body: isoBody.wrap(
+                  `<!-- pr-flow:retries=${String(isoCount.unwrap(event.retryCount) + 1)} -->\nTransient agent API error during review follow-up (attempt ${String(isoCount.unwrap(event.retryCount) + 1)}/${String(isoCount.unwrap(event.maxRetries))}); keeping \`pr-flow-status\` in \`review-pending\`.\n\n**Reason:** ${isoMessage.unwrap(event.reason)}`,
+                ),
               }),
             })),
           },
@@ -216,7 +247,9 @@ export const issueMachine = setup({
                 effects: appendEffect(context.effects, {
                   type: 'ADD_COMMENT',
                   issueNumber: context.issueNumber,
-                  body: `Review follow-up failed after ${event.maxRetries} transient retries.\n\n**Reason:** ${event.reason}`,
+                  body: isoBody.wrap(
+                    `Review follow-up failed after ${String(isoCount.unwrap(event.maxRetries))} transient retries.\n\n**Reason:** ${isoMessage.unwrap(event.reason)}`,
+                  ),
                 }),
               })),
             ],
@@ -230,7 +263,9 @@ export const issueMachine = setup({
               effects: appendEffect(context.effects, {
                 type: 'ADD_COMMENT',
                 issueNumber: context.issueNumber,
-                body: `Review follow-up failed.\n\n**Reason:** ${event.reason}`,
+                body: isoBody.wrap(
+                  `Review follow-up failed.\n\n**Reason:** ${isoMessage.unwrap(event.reason)}`,
+                ),
               }),
             })),
           ],
@@ -263,33 +298,38 @@ export const issueMachine = setup({
   },
 });
 
-export interface TransitionResult {
-  previousStatus: IssueStatus;
-  nextStatus: IssueStatus;
-  changed: boolean;
-  effects: Effect[];
-}
+export type TransitionChangeKind = 'changed' | 'unchanged';
+
+export type TransitionResult = {
+  readonly previousStatus: IssueStatus;
+  readonly nextStatus: IssueStatus;
+  readonly changeKind: TransitionChangeKind;
+  readonly effects: ReadonlyArray<Effect>;
+};
+
+const toTransitionResult = (
+  previousStatus: IssueStatus,
+  nextSnapshot: { readonly value: IssueStatus; readonly context: IssueMachineContext },
+): TransitionResult => ({
+  previousStatus,
+  nextStatus: nextSnapshot.value,
+  changeKind: nextSnapshot.value !== previousStatus ? 'changed' : 'unchanged',
+  effects: nextSnapshot.context.effects,
+});
 
 export function transitionIssue(
   issue: Pick<IssueNode, 'number' | 'status'>,
   event: IssueEvent,
 ): TransitionResult {
-  const currentSnapshot = issueMachine.resolveState({
-    value: issue.status,
-    context: {
-      issueNumber: issue.number,
-      effects: [],
-    },
-  });
-
-  const nextSnapshot = getNextSnapshot(issueMachine, currentSnapshot, event);
-  const nextStatus = nextSnapshot.value as IssueStatus;
-  const changed = nextStatus !== issue.status;
-
-  return {
-    previousStatus: issue.status,
-    nextStatus,
-    changed,
-    effects: nextSnapshot.context.effects,
-  };
+  return toTransitionResult(
+    issue.status,
+    transition(
+      issueMachine,
+      issueMachine.resolveState({
+        value: issue.status,
+        context: { issueNumber: issue.number, effects: [] },
+      }),
+      event,
+    )[0],
+  );
 }

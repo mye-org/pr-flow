@@ -1,19 +1,21 @@
 import { execSync, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as E from 'fp-ts/Either';
+import * as E from 'fp-ts/lib/Either';
+import * as O from 'fp-ts/lib/Option';
 import type { PrFlowConfig } from '../../domain/config.js';
 import type { DomainError } from '../../domain/errors.js';
 import { AgentResultSchema, type AgentResult } from '../../domain/issue.js';
+import { isoCount, isoMessage } from '../../domain/newtypes.js';
 
-export interface AgentRunOutput {
+export type AgentRunOutput = {
   result: AgentResult;
   patchPath: string;
   resultPath: string;
   hasChanges: boolean;
-}
+};
 
-const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
+const TRANSIENT_ERROR_PATTERNS: ReadonlyArray<RegExp> = [
   /\b503\b/,
   /\b429\b/,
   /Service Unavailable/i,
@@ -32,7 +34,7 @@ export function isTransientAgentError(output: string, timedOut: boolean): boolea
   return TRANSIENT_ERROR_PATTERNS.some((pattern) => pattern.test(output));
 }
 
-const MODEL_UNAVAILABLE_PATTERNS: readonly RegExp[] = [
+const MODEL_UNAVAILABLE_PATTERNS: ReadonlyArray<RegExp> = [
   /ModelNotFoundError/,
   /is no longer available/i,
   /\b404\b/,
@@ -60,11 +62,11 @@ function runShell(
     killSignal: 'SIGTERM',
   });
   const timedOut = res.error !== undefined && (res.error as NodeJS.ErrnoException).code === 'ETIMEDOUT';
-  const output = `${res.stdout ?? ''}\n${res.stderr ?? ''}`.trim();
+  const output = `${res.stdout}\n${res.stderr}`.trim();
   return {
     ok: res.status === 0 && !timedOut,
     status: res.status ?? 1,
-    output: timedOut ? `${output}\n[pr-flow] Command timed out after ${timeoutMs}ms`.trim() : output,
+    output: timedOut ? `${output}\n[pr-flow] Command timed out after ${String(timeoutMs ?? 0)}ms`.trim() : output,
     timedOut,
   };
 }
@@ -86,7 +88,7 @@ function resetWorkingTree(cwd: string, outputDir: string): void {
 function tryReadResult(resultPath: string): AgentResult | null {
   if (!fs.existsSync(resultPath)) return null;
   try {
-    const rawJson = JSON.parse(fs.readFileSync(resultPath, 'utf-8'));
+    const rawJson: unknown = JSON.parse(fs.readFileSync(resultPath, 'utf-8'));
     const validated = AgentResultSchema.safeParse(rawJson);
     return validated.success ? validated.data : null;
   } catch {
@@ -94,7 +96,7 @@ function tryReadResult(resultPath: string): AgentResult | null {
   }
 }
 
-export interface GeminiUsageStats {
+export type GeminiUsageStats = {
   totalTurns?: number;
   inputTokens?: number;
   cachedTokens?: number;
@@ -102,7 +104,7 @@ export interface GeminiUsageStats {
   thoughtTokens?: number;
 }
 
-export interface GeminiJsonOutput {
+export type GeminiJsonOutput = {
   response?: string;
   stats?: GeminiUsageStats;
   error?: string;
@@ -118,7 +120,7 @@ export function parseGeminiJsonOutput(rawOutput: string): GeminiJsonOutput | nul
 
   const tryParse = (candidate: string): Record<string, unknown> | null => {
     try {
-      const parsed = JSON.parse(candidate);
+      const parsed: unknown = JSON.parse(candidate);
       return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
         ? (parsed as Record<string, unknown>)
         : null;
@@ -142,12 +144,10 @@ export function parseGeminiJsonOutput(rawOutput: string): GeminiJsonOutput | nul
     typeof obj.error === 'object' && obj.error !== null
       ? (obj.error as Record<string, unknown>)
       : null;
-  const error =
-    typeof obj.error === 'string'
-      ? obj.error
-      : typeof errorObj?.message === 'string'
-        ? errorObj.message
-        : undefined;
+  const error = (() => {
+    if (typeof obj.error === 'string') return obj.error;
+    return typeof errorObj?.message === 'string' ? errorObj.message : undefined;
+  })();
 
   let stats: GeminiUsageStats | undefined;
   const rawStats =
@@ -169,11 +169,11 @@ export function parseGeminiJsonOutput(rawOutput: string): GeminiJsonOutput | nul
     if (models) {
       for (const m of Object.values(models)) {
         const api =
-          typeof m?.api === 'object' && m.api !== null
+          typeof m.api === 'object' && m.api !== null
             ? (m.api as Record<string, unknown>)
             : null;
         const tokens =
-          typeof m?.tokens === 'object' && m.tokens !== null
+          typeof m.tokens === 'object' && m.tokens !== null
             ? (m.tokens as Record<string, unknown>)
             : null;
         if (api || tokens) hasModelStats = true;
@@ -212,21 +212,20 @@ export function extractAgentResultFromText(text: string): AgentResult | null {
   const trimmed = text.trim();
   if (!trimmed) return null;
 
-  const candidates: string[] = [trimmed];
-  const fencedMatches = trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi);
-  for (const m of fencedMatches) {
-    if (m[1]) candidates.unshift(m[1].trim());
-  }
+  const fenced = Array.from(trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi))
+    .map((m) => m[1]?.trim() ?? '')
+    .filter((s) => s.length > 0)
+    .reverse();
 
   const lastOpen = trimmed.lastIndexOf('{');
   const lastClose = trimmed.lastIndexOf('}');
-  if (lastOpen >= 0 && lastClose > lastOpen) {
-    candidates.push(trimmed.slice(lastOpen, lastClose + 1));
-  }
+  const sliced = lastOpen >= 0 && lastClose > lastOpen ? [trimmed.slice(lastOpen, lastClose + 1)] : [];
+
+  const candidates: ReadonlyArray<string> = [...fenced, trimmed, ...sliced];
 
   for (const candidate of candidates) {
     try {
-      const parsed = JSON.parse(candidate);
+      const parsed: unknown = JSON.parse(candidate);
       const validated = AgentResultSchema.safeParse(parsed);
       if (validated.success) return validated.data;
     } catch {
@@ -273,12 +272,12 @@ export function computeAttemptTimeoutMs(remainingMs: number, remainingModels: nu
 function logTokenUsage(modelName: string, stats: GeminiUsageStats): void {
   const parts = [
     `model=${modelName}`,
-    stats.totalTurns !== undefined ? `turns=${stats.totalTurns}` : null,
-    stats.inputTokens !== undefined ? `input=${stats.inputTokens}` : null,
-    stats.cachedTokens !== undefined ? `cached=${stats.cachedTokens}` : null,
-    stats.outputTokens !== undefined ? `output=${stats.outputTokens}` : null,
+    stats.totalTurns !== undefined ? `turns=${String(stats.totalTurns)}` : null,
+    stats.inputTokens !== undefined ? `input=${String(stats.inputTokens)}` : null,
+    stats.cachedTokens !== undefined ? `cached=${String(stats.cachedTokens)}` : null,
+    stats.outputTokens !== undefined ? `output=${String(stats.outputTokens)}` : null,
     stats.thoughtTokens !== undefined && stats.thoughtTokens > 0
-      ? `thoughts=${stats.thoughtTokens}`
+      ? `thoughts=${String(stats.thoughtTokens)}`
       : null,
   ].filter(Boolean);
   console.error(`[pr-flow] Agent usage: ${parts.join(' ')}`);
@@ -286,7 +285,7 @@ function logTokenUsage(modelName: string, stats: GeminiUsageStats): void {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
   if (summaryPath) {
     try {
-      const line = `- **${modelName}**: turns=${stats.totalTurns ?? '?'}, input=${stats.inputTokens ?? 0}, cached=${stats.cachedTokens ?? 0}, output=${stats.outputTokens ?? 0}, thoughts=${stats.thoughtTokens ?? 0}\n`;
+      const line = `- **${modelName}**: turns=${String(stats.totalTurns ?? '?')}, input=${String(stats.inputTokens ?? 0)}, cached=${String(stats.cachedTokens ?? 0)}, output=${String(stats.outputTokens ?? 0)}, thoughts=${String(stats.thoughtTokens ?? 0)}\n`;
       fs.appendFileSync(summaryPath, line, 'utf-8');
     } catch {
       // Best-effort CI step summary logging
@@ -314,7 +313,7 @@ function withTemporaryGeminiSettings<T>(
     let merged: Record<string, unknown> = {};
     if (previousContent) {
       try {
-        const parsed = JSON.parse(previousContent);
+        const parsed: unknown = JSON.parse(previousContent);
         if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
           merged = parsed as Record<string, unknown>;
         }
@@ -373,8 +372,9 @@ export function runAgentExecution(params: {
     if (!setup.ok) {
       return E.left({
         type: 'AGENT_EXECUTION_ERROR',
-        message: `Workspace setupCommand failed: ${setup.output}`,
-        exitCode: setup.status,
+        message: isoMessage.wrap(`Workspace setupCommand failed: ${setup.output}`),
+        exitCode: O.some(isoCount.wrap(setup.status)),
+        retryability: O.none,
       });
     }
   }
@@ -396,7 +396,7 @@ export function runAgentExecution(params: {
       null;
 
     for (let idx = 0; idx < modelsToTry.length; idx++) {
-      const modelName = modelsToTry[idx]!;
+      const modelName = modelsToTry[idx] ?? 'custom';
       const remainingMs = deadlineMs - Date.now();
       if (remainingMs <= 10_000 && idx > 0) {
         break;
@@ -416,7 +416,7 @@ export function runAgentExecution(params: {
       const agentCommand =
         config.agent.provider === 'gemini'
           ? `npx --yes @google/gemini-cli --model ${modelName} --yolo --output-format json -p "$(cat ${JSON.stringify(promptPath)})"`
-          : config.agent.command!;
+          : (config.agent.command ?? '');
 
       const agentRun = runShell(
         agentCommand,
@@ -467,9 +467,9 @@ export function runAgentExecution(params: {
     const retryable = isTransientAgentError(lastRun.output, lastRun.timedOut);
     return E.left({
       type: 'AGENT_EXECUTION_ERROR',
-      message: `Agent CLI exited with code ${lastRun.status}: ${lastRun.output.slice(-1500)}`,
-      exitCode: lastRun.status,
-      retryable,
+      message: isoMessage.wrap(`Agent CLI exited with code ${String(lastRun.status)}: ${lastRun.output.slice(-1500)}`),
+      exitCode: O.some(isoCount.wrap(lastRun.status)),
+      retryability: O.some(retryable ? 'retryable' : 'fatal'),
     });
   }
 
@@ -519,7 +519,7 @@ export function runAgentExecution(params: {
   } catch (err) {
     return E.left({
       type: 'GIT_ERROR',
-      message: `Failed to export changes.patch: ${err instanceof Error ? err.message : String(err)}`,
+      message: isoMessage.wrap(`Failed to export changes.patch: ${err instanceof Error ? err.message : String(err)}`),
     });
   }
 }

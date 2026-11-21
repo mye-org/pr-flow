@@ -1,4 +1,6 @@
+import * as O from 'fp-ts/lib/Option';
 import { describe, expect, it } from 'vitest';
+import { isoIssueNumber } from '../src/domain/newtypes.js';
 import { computeContainerStatus, computeRollupEffects } from '../src/rollup/computeRollup.js';
 
 describe('computeContainerStatus', () => {
@@ -33,25 +35,35 @@ describe('computeContainerStatus', () => {
 describe('computeRollupEffects', () => {
   it('closes an open container when all children become fixed', () => {
     const { targetStatus, effects } = computeRollupEffects(
-      { number: 1, status: 'in_progress', state: 'open' },
+      { number: isoIssueNumber.wrap(1), status: 'in_progress', state: 'open' },
       [{ status: 'fixed' }, { status: 'fixed' }],
     );
     expect(targetStatus).toBe('fixed');
     expect(effects).toEqual([
-      { type: 'SET_STATUS_FIELD', issueNumber: 1, from: 'in_progress', to: 'fixed' },
-      { type: 'CLOSE_ISSUE', issueNumber: 1 },
+      {
+        type: 'SET_STATUS_FIELD',
+        issueNumber: isoIssueNumber.wrap(1),
+        from: O.some('in_progress'),
+        to: 'fixed',
+      },
+      { type: 'CLOSE_ISSUE', issueNumber: isoIssueNumber.wrap(1) },
     ]);
   });
 
   it('reopens a closed container if a child transitions to needs_human', () => {
     const { targetStatus, effects } = computeRollupEffects(
-      { number: 1, status: 'fixed', state: 'closed' },
+      { number: isoIssueNumber.wrap(1), status: 'fixed', state: 'closed' },
       [{ status: 'fixed' }, { status: 'needs_human' }],
     );
     expect(targetStatus).toBe('needs_human');
     expect(effects).toEqual([
-      { type: 'SET_STATUS_FIELD', issueNumber: 1, from: 'fixed', to: 'needs_human' },
-      { type: 'REOPEN_ISSUE', issueNumber: 1 },
+      {
+        type: 'SET_STATUS_FIELD',
+        issueNumber: isoIssueNumber.wrap(1),
+        from: O.some('fixed'),
+        to: 'needs_human',
+      },
+      { type: 'REOPEN_ISSUE', issueNumber: isoIssueNumber.wrap(1) },
     ]);
   });
 });

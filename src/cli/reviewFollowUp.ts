@@ -1,18 +1,19 @@
-import * as E from 'fp-ts/Either';
+import * as E from 'fp-ts/lib/Either';
 import type { GitHubPort, PrReviewThread } from '../adapters/github/types.js';
 import type { AgentResult } from '../domain/issue.js';
+import { isoMessage } from '../domain/newtypes.js';
 
-export interface ReviewFollowUpResult {
-  repliedCount: number;
-  resolvedCount: number;
-  warnings: string[];
-}
+export type ReviewFollowUpResult = {
+  readonly repliedCount: number;
+  readonly resolvedCount: number;
+  readonly warnings: ReadonlyArray<string>;
+};
 
 export async function replyAndResolveReviewThreads(params: {
-  github: GitHubPort;
-  branch: string;
-  agentResult: AgentResult;
-  threads: readonly PrReviewThread[];
+  readonly github: GitHubPort;
+  readonly branch: string;
+  readonly agentResult: AgentResult;
+  readonly threads: ReadonlyArray<PrReviewThread>;
 }): Promise<ReviewFollowUpResult> {
   const { github, branch, agentResult, threads } = params;
   const replyByThreadId = new Map<string, string>();
@@ -23,7 +24,7 @@ export async function replyAndResolveReviewThreads(params: {
 
   let repliedCount = 0;
   let resolvedCount = 0;
-  const warnings: string[] = [];
+  let warnings: ReadonlyArray<string> = [];
 
   for (const thread of threads) {
     if (thread.isResolved) continue;
@@ -35,16 +36,22 @@ export async function replyAndResolveReviewThreads(params: {
 
     const replyRes = await github.replyToReviewThread(thread.threadId, replyBody)();
     if (E.isLeft(replyRes)) {
-      const msg = 'message' in replyRes.left ? replyRes.left.message : JSON.stringify(replyRes.left);
-      warnings.push(`Failed to reply to review thread ${thread.threadId}: ${msg}`);
+      const msg =
+        'message' in replyRes.left
+          ? isoMessage.unwrap(replyRes.left.message)
+          : JSON.stringify(replyRes.left);
+      warnings = [...warnings, `Failed to reply to review thread ${thread.threadId}: ${msg}`];
       continue;
     }
     repliedCount++;
 
     const resolveRes = await github.resolveReviewThread(thread.threadId)();
     if (E.isLeft(resolveRes)) {
-      const msg = 'message' in resolveRes.left ? resolveRes.left.message : JSON.stringify(resolveRes.left);
-      warnings.push(`Failed to resolve review thread ${thread.threadId}: ${msg}`);
+      const msg =
+        'message' in resolveRes.left
+          ? isoMessage.unwrap(resolveRes.left.message)
+          : JSON.stringify(resolveRes.left);
+      warnings = [...warnings, `Failed to resolve review thread ${thread.threadId}: ${msg}`];
       continue;
     }
     resolvedCount++;

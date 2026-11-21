@@ -9,8 +9,9 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
     "test": "vitest run",
-    "verify": "npm run typecheck && npm run build && npm run test"
+    "verify": "npm run typecheck && npm run lint && npm run build && npm run test"
   },
   "keywords": [
     "github-actions",
@@ -26,13 +27,17 @@
     "@octokit/rest": "^21.0.2",
     "commander": "^12.1.0",
     "fp-ts": "^2.16.9",
+    "newtype-ts": "^0.3.5",
     "ts-pattern": "^5.5.0",
     "xstate": "^5.19.0",
     "yaml": "^2.6.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@mye-org/eslint-plugin-strict-fp": "git+https://github.com/mye-org/very-strict-ts-linter.git",
     "@types/node": "^22.10.0",
+    "eslint": "^9.39.5",
+    "jiti": "^2.7.0",
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"

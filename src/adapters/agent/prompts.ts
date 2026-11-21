@@ -1,24 +1,26 @@
 import type { IssueNode } from '../../domain/issue.js';
+import { isoBody, isoIssueNumber, isoTitle } from '../../domain/newtypes.js';
 import type { PrReviewThread } from '../github/types.js';
 
 function formatAgentsSection(agentsMd?: string): string {
   return agentsMd ? `\n## Repository Instructions (AGENTS.md)\n${agentsMd.trim()}\n` : '';
 }
 
-function formatRepoFilesSection(repoFiles?: readonly string[]): string {
+function formatRepoFilesSection(repoFiles?: ReadonlyArray<string>): string {
   if (!repoFiles || repoFiles.length === 0) return '';
   return `\n## Repository File Tree\n\`\`\`\n${repoFiles.join('\n')}\n\`\`\`\n`;
 }
 
 export function buildImplementPrompt(params: {
-  issue: IssueNode;
-  verifyCommand: string;
-  agentsMd?: string;
-  resultFilePath: string;
-  repoFiles?: readonly string[];
+  readonly issue: IssueNode;
+  readonly verifyCommand: string;
+  readonly agentsMd?: string;
+  readonly resultFilePath: string;
+  readonly repoFiles?: ReadonlyArray<string>;
 }): string {
   const agentsSection = formatAgentsSection(params.agentsMd);
   const repoFilesSection = formatRepoFilesSection(params.repoFiles);
+  const issueBody = isoBody.unwrap(params.issue.body);
 
   return `You are an autonomous software engineer implementing a GitHub issue.
 ${agentsSection}
@@ -37,34 +39,33 @@ ${agentsSection}
      \`{"status":"failed","summary":"<what failed>","reason":"<error details>","testsRun":true}\`
 ${repoFilesSection}
 ## Issue Details
-- **Number:** #${params.issue.number}
-- **Title:** ${params.issue.title}
+- **Number:** #${String(isoIssueNumber.unwrap(params.issue.number))}
+- **Title:** ${isoTitle.unwrap(params.issue.title)}
 - **Type:** ${params.issue.type}
 
 ### Description
-${params.issue.body || '(No description provided)'}
+${issueBody.length > 0 ? issueBody : '(No description provided)'}
 `;
 }
 
 export function buildReviewPrompt(params: {
-  issue: IssueNode;
-  prNumber: number;
-  reviewComments: readonly string[];
-  reviewThreads?: readonly PrReviewThread[];
-  verifyCommand: string;
-  agentsMd?: string;
-  resultFilePath: string;
-  changedFiles?: readonly string[];
-  prDiff?: string;
+  readonly issue: IssueNode;
+  readonly prNumber: number;
+  readonly reviewComments: ReadonlyArray<string>;
+  readonly reviewThreads?: ReadonlyArray<PrReviewThread>;
+  readonly verifyCommand: string;
+  readonly agentsMd?: string;
+  readonly resultFilePath: string;
+  readonly changedFiles?: ReadonlyArray<string>;
+  readonly prDiff?: string;
 }): string {
   const agentsSection = formatAgentsSection(params.agentsMd);
-
   const threads = params.reviewThreads ?? [];
   const threadsBlock =
     threads.length > 0
       ? threads
           .map((t) => {
-            const loc = t.line !== null ? `${t.path}:${t.line}` : t.path;
+            const loc = t.line !== null ? `${t.path}:${String(t.line)}` : t.path;
             const msgs = t.comments
               .map((c) => `  - **${c.author}**: ${c.body}`)
               .join('\n');
@@ -76,13 +77,10 @@ export function buildReviewPrompt(params: {
   const generalBlock =
     params.reviewComments.length > 0 ? params.reviewComments.join('\n\n') : '';
 
-  const feedbackSections: string[] = [];
-  if (threadsBlock) {
-    feedbackSections.push(`### Unresolved Inline Review Threads\n${threadsBlock}`);
-  }
-  if (generalBlock) {
-    feedbackSections.push(`### General PR & Review Comments\n${generalBlock}`);
-  }
+  const feedbackSections: ReadonlyArray<string> = [
+    ...(threadsBlock ? [`### Unresolved Inline Review Threads\n${threadsBlock}`] : []),
+    ...(generalBlock ? [`### General PR & Review Comments\n${generalBlock}`] : []),
+  ];
   const commentsBlock =
     feedbackSections.length > 0
       ? feedbackSections.join('\n\n')
@@ -95,7 +93,7 @@ export function buildReviewPrompt(params: {
 
   const changedFilesSection =
     params.changedFiles && params.changedFiles.length > 0
-      ? `\n## Changed Files on PR #${params.prNumber}\n\`\`\`\n${params.changedFiles.join('\n')}\n\`\`\`\n`
+      ? `\n## Changed Files on PR #${String(params.prNumber)}\n\`\`\`\n${params.changedFiles.join('\n')}\n\`\`\`\n`
       : '';
 
   const diffSection =
@@ -103,9 +101,10 @@ export function buildReviewPrompt(params: {
       ? `\n## Current PR Diff\n\`\`\`diff\n${params.prDiff.trim()}\n\`\`\`\n`
       : '';
 
+  const rawBody = isoBody.unwrap(params.issue.body);
   const issueBodySection =
-    params.issue.body && params.issue.body.trim().length > 0
-      ? `\n### Original Issue Description\n${params.issue.body.trim()}\n`
+    rawBody.trim().length > 0
+      ? `\n### Original Issue Description\n${rawBody.trim()}\n`
       : '';
 
   return `You are addressing code review feedback on a pull request.
@@ -119,8 +118,8 @@ ${agentsSection}
 5. Write a structured JSON file to \`${params.resultFilePath}\` (or output it as your final JSON response):${resolvedCommentsInstruction}
    (or \`"needs_human"\` / \`"failed"\` with \`"reason"\` if blocked).
 
-## Issue: #${params.issue.number} — ${params.issue.title}
-## PR: #${params.prNumber}
+## Issue: #${String(isoIssueNumber.unwrap(params.issue.number))} — ${isoTitle.unwrap(params.issue.title)}
+## PR: #${String(params.prNumber)}
 ${issueBodySection}${changedFilesSection}${diffSection}
 ## Review Feedback to Address
 ${commentsBlock}

@@ -1,3 +1,4 @@
+import * as O from 'fp-ts/lib/Option';
 import { describe, expect, it } from 'vitest';
 import { buildImplementPrompt, buildReviewPrompt } from '../src/adapters/agent/prompts.js';
 import {
@@ -10,6 +11,13 @@ import {
 } from '../src/adapters/agent/runner.js';
 import type { PrFlowConfig } from '../src/domain/config.js';
 import type { IssueNode } from '../src/domain/issue.js';
+import {
+  isoBody,
+  isoIsoTimestamp,
+  isoIssueNumber,
+  isoLabelName,
+  isoTitle,
+} from '../src/domain/newtypes.js';
 
 describe('isTransientAgentError', () => {
   it('detects 503, 429, UNAVAILABLE, fetch failed, and timeouts as transient', () => {
@@ -37,19 +45,20 @@ describe('isModelFallbackError', () => {
 
 describe('parseGeminiJsonOutput', () => {
   it('parses response and aggregated token/turn stats from gemini-cli JSON output', () => {
-    const raw = `Loaded cached credentials.\n${JSON.stringify({
-      response: 'Done!\n```json\n{"status":"success","summary":"Added feature","testsRun":true}\n```',
-      stats: {
-        models: {
-          'gemini-3.8-flash': {
-            api: { totalRequests: 4 },
-            tokens: { prompt: 12000, cached: 8000, candidates: 450, thoughts: 300 },
+    const parsed = parseGeminiJsonOutput(
+      `Loaded cached credentials.\n${JSON.stringify({
+        response: 'Done!\n```json\n{"status":"success","summary":"Added feature","testsRun":true}\n```',
+        stats: {
+          models: {
+            'gemini-3.8-flash': {
+              api: { totalRequests: 4 },
+              tokens: { prompt: 12000, cached: 8000, candidates: 450, thoughts: 300 },
+            },
           },
+          tools: { totalCalls: 3 },
         },
-        tools: { totalCalls: 3 },
-      },
-    })}`;
-    const parsed = parseGeminiJsonOutput(raw);
+      })}`,
+    );
     expect(parsed).not.toBeNull();
     expect(parsed?.stats).toEqual({
       totalTurns: 4,
@@ -68,10 +77,11 @@ describe('parseGeminiJsonOutput', () => {
 
 describe('extractAgentResultFromText', () => {
   it('extracts valid AgentResult from fenced JSON block', () => {
-    const res = extractAgentResultFromText(
-      'Completed.\n```json\n{"status":"success","summary":"Fixed bug","testsRun":true,"filesChanged":["src/a.ts"]}\n```',
-    );
-    expect(res).toEqual({
+    expect(
+      extractAgentResultFromText(
+        'Completed.\n```json\n{"status":"success","summary":"Fixed bug","testsRun":true,"filesChanged":["src/a.ts"]}\n```',
+      ),
+    ).toEqual({
       status: 'success',
       summary: 'Fixed bug',
       testsRun: true,
@@ -86,31 +96,31 @@ describe('extractAgentResultFromText', () => {
 
 describe('buildGeminiSettings', () => {
   it('builds settings with maxSessionTurns, compressionThreshold, and optional thinkingBudget', () => {
-    const baseConfig: PrFlowConfig = {
-      version: 1,
-      wipLimit: 4,
-      baseBranch: 'main',
-      statusFieldName: 'pr-flow-status',
-      workspace: { setupCommand: '', verifyCommand: 'npm test' },
-      agent: {
-        provider: 'gemini',
-        model: 'gemini-3.8-flash',
-        fallbackModels: [],
-        maxRetries: 3,
-        timeoutMinutes: 20,
-        maxSessionTurns: 20,
-        compressionThreshold: 0.2,
-        thinkingBudget: 2048,
-      },
-      triggers: {
-        reviewMode: 'changes_requested',
-        autoPickup: true,
-        autoMergeOnApprove: true,
-        mergeMethod: 'squash',
-      },
-    };
-    const settings = buildGeminiSettings(baseConfig);
-    expect(settings).toEqual({
+    expect(
+      buildGeminiSettings({
+        version: 1,
+        wipLimit: 4,
+        baseBranch: 'main',
+        statusFieldName: 'pr-flow-status',
+        workspace: { setupCommand: '', verifyCommand: 'npm test' },
+        agent: {
+          provider: 'gemini',
+          model: 'gemini-3.8-flash',
+          fallbackModels: [],
+          maxRetries: 3,
+          timeoutMinutes: 20,
+          maxSessionTurns: 20,
+          compressionThreshold: 0.2,
+          thinkingBudget: 2048,
+        },
+        triggers: {
+          reviewMode: 'changes_requested',
+          autoPickup: true,
+          autoMergeOnApprove: true,
+          mergeMethod: 'squash',
+        },
+      } satisfies PrFlowConfig),
+    ).toEqual({
       model: { maxSessionTurns: 20, compressionThreshold: 0.2 },
       modelConfigs: {
         overrides: [
@@ -138,19 +148,19 @@ describe('computeAttemptTimeoutMs', () => {
 
 describe('prompt construction', () => {
   const sampleIssue: IssueNode = {
-    number: 42,
-    title: 'Optimize agent tokens',
-    body: 'Reduce unnecessary round-trips.',
+    number: isoIssueNumber.wrap(42),
+    title: isoTitle.wrap('Optimize agent tokens'),
+    body: isoBody.wrap('Reduce unnecessary round-trips.'),
     state: 'open',
     status: 'in_progress',
     type: 'task',
-    labels: ['type:task', 'ai-managed'],
+    labels: [isoLabelName.wrap('type:task'), isoLabelName.wrap('ai-managed')],
     subIssueNumbers: [],
     blockedByNumbers: [],
     blockingNumbers: [],
-    linkedPrNumber: null,
-    parentNumber: null,
-    updatedAt: '2026-11-21T00:00:00Z',
+    linkedPrNumber: O.none,
+    parentNumber: O.none,
+    updatedAt: isoIsoTimestamp.wrap('2026-11-21T00:00:00Z'),
   };
 
   it('places static instructions before dynamic issue and repo file tree for prefix caching', () => {

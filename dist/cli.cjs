@@ -3348,14 +3348,14 @@ var require_internal = __commonJS({
       return { _tag: "Some", value: a2 };
     };
     exports2.some = some12;
-    var isLeft6 = function(ma) {
+    var isLeft7 = function(ma) {
       return ma._tag === "Left";
     };
-    exports2.isLeft = isLeft6;
-    var isRight2 = function(ma) {
+    exports2.isLeft = isLeft7;
+    var isRight3 = function(ma) {
       return ma._tag === "Right";
     };
-    exports2.isRight = isRight2;
+    exports2.isRight = isRight3;
     var left8 = function(e2) {
       return { _tag: "Left", left: e2 };
     };
@@ -18993,6 +18993,41 @@ ${agentsSection}
 ${issueBodySection}${changedFilesSection}${diffSection}
 ## Review Feedback to Address
 ${commentsBlock}
+`;
+}
+function buildVerifyFixPrompt(params) {
+  const changedFilesSection = params.changedFiles && params.changedFiles.length > 0 ? `
+## Currently Changed Files
+\`\`\`
+${params.changedFiles.join("\n")}
+\`\`\`
+` : "";
+  const diffSection = params.currentDiff && params.currentDiff.trim().length > 0 ? `
+## Current Working Tree Diff
+\`\`\`diff
+${params.currentDiff.trim()}
+\`\`\`
+` : "";
+  const resolvedNote = params.previousResolvedComments && params.previousResolvedComments.length > 0 ? `
+   - Preserve \`"resolvedComments"\` in \`result.json\` for the review threads already addressed: ${JSON.stringify(params.previousResolvedComments)}` : "";
+  return `You are an autonomous software engineer fixing verification (linting, typechecking, and/or test) failures in the current working tree.
+
+## Verification Failure (Fix Attempt ${String(params.attempt)}/${String(params.maxAttempts)})
+The verification command \`${params.verifyCommand}\` failed with the following output:
+\`\`\`
+${params.verifyOutput}
+\`\`\`
+${changedFilesSection}${diffSection}
+## Strict Execution Rules
+1. Fix all linting, typechecking, formatting, and test errors shown above in the current working tree.
+2. Do NOT run \`git push\`, \`gh\`, or modify git branches.
+3. Re-run the full verification command to confirm all checks pass before finishing:
+   \`${params.verifyCommand}\`
+4. Write a structured JSON file to \`${params.resultFilePath}\` (or output it as your final JSON response):
+   - On success:
+     \`{"status":"success","summary":"<concise summary of fixes>","testsRun":true,"filesChanged":["..."]}\`${resolvedNote}
+   - If blocked and human input is required:
+     \`{"status":"needs_human","summary":"<what was attempted>","reason":"<specific blocker>","testsRun":true}\`
 `;
 }
 
@@ -39326,28 +39361,12 @@ function withTemporaryGeminiSettings(cwd, config2, fn) {
     }
   }
 }
-function runAgentExecution(params) {
-  const { config: config2, prompt, cwd, outputDir } = params;
-  fs.mkdirSync(outputDir, { recursive: true });
-  const promptPath = path.join(outputDir, "prompt.md");
-  const resultPath = path.join(outputDir, "result.json");
-  const patchPath = path.join(outputDir, "changes.patch");
+function invokeAgentWithFallback(params) {
+  const { config: config2, prompt, cwd, outputDir, promptPath, resultPath, deadlineMs, resetOnFallback } = params;
   fs.writeFileSync(promptPath, prompt, "utf-8");
-  if (config2.workspace.setupCommand.trim().length > 0) {
-    const setup2 = runShell(config2.workspace.setupCommand, cwd);
-    if (!setup2.ok) {
-      return E.left({
-        type: "AGENT_EXECUTION_ERROR",
-        message: isoMessage.wrap(`Workspace setupCommand failed: ${setup2.output}`),
-        exitCode: O3.some(isoCount.wrap(setup2.status)),
-        retryability: O3.none
-      });
-    }
-  }
   const nodeOpts = [process.env.NODE_OPTIONS, "--dns-result-order=ipv4first"].filter(Boolean).join(" ");
   const modelsToTry = config2.agent.provider === "gemini" ? Array.from(/* @__PURE__ */ new Set([config2.agent.model, ...config2.agent.fallbackModels])) : ["custom"];
-  const deadlineMs = Date.now() + config2.agent.timeoutMinutes * 6e4;
-  const { parsedResult, lastRun } = withTemporaryGeminiSettings(cwd, config2, () => {
+  return withTemporaryGeminiSettings(cwd, config2, () => {
     let currentResult = null;
     let currentLastRun = null;
     for (let idx = 0; idx < modelsToTry.length; idx++) {
@@ -39358,7 +39377,9 @@ function runAgentExecution(params) {
       }
       if (idx > 0) {
         console.error(`[pr-flow] Falling back to model "${modelName}" after error...`);
-        resetWorkingTree(cwd, outputDir);
+        if (resetOnFallback) {
+          resetWorkingTree(cwd, outputDir);
+        }
         if (fs.existsSync(resultPath)) fs.unlinkSync(resultPath);
       }
       const attemptTimeoutMs = computeAttemptTimeoutMs(
@@ -39406,6 +39427,91 @@ ${agentRun.output}
     }
     return { parsedResult: currentResult, lastRun: currentLastRun };
   });
+}
+function collectWorkingTreeContext(cwd, outputDir) {
+  try {
+    const relOut = path.relative(cwd, outputDir);
+    const excludeArgs = [
+      ":(exclude)_pr_flow",
+      ":(exclude).gemini",
+      ...relOut && !relOut.startsWith("..") && !path.isAbsolute(relOut) ? [`:(exclude)${relOut}`] : []
+    ];
+    const trackedOut = (0, import_node_child_process.execFileSync)(
+      "git",
+      ["diff", "--name-only", "HEAD", "--", ".", ...excludeArgs],
+      { cwd, encoding: "utf-8" }
+    );
+    const untrackedOut = (0, import_node_child_process.execFileSync)(
+      "git",
+      ["ls-files", "--others", "--exclude-standard", "--", ".", ...excludeArgs],
+      { cwd, encoding: "utf-8" }
+    );
+    const changedFiles = Array.from(
+      new Set(
+        `${trackedOut}
+${untrackedOut}`.split("\n").map((f) => f.trim()).filter(Boolean)
+      )
+    );
+    const rawDiff = (0, import_node_child_process.execFileSync)("git", ["diff", "HEAD", "--", ".", ...excludeArgs], {
+      cwd,
+      encoding: "utf-8"
+    });
+    const MAX_DIFF_CHARS = 12e3;
+    const currentDiff = rawDiff.length > MAX_DIFF_CHARS ? `${rawDiff.slice(0, MAX_DIFF_CHARS)}
+... [diff truncated at ${String(MAX_DIFF_CHARS)} chars]` : rawDiff;
+    return { changedFiles, currentDiff };
+  } catch {
+    return { changedFiles: void 0, currentDiff: void 0 };
+  }
+}
+function exportChangesPatch(cwd, outputDir, patchPath) {
+  try {
+    (0, import_node_child_process.execFileSync)("git", ["add", "-A"], { cwd, stdio: "pipe" });
+    const relOut = path.relative(cwd, outputDir);
+    if (relOut && !relOut.startsWith("..") && !path.isAbsolute(relOut)) {
+      (0, import_node_child_process.execFileSync)("git", ["reset", "-q", "--", relOut], { cwd, stdio: "pipe" });
+    }
+    if (fs.existsSync(path.join(cwd, "_pr_flow"))) {
+      (0, import_node_child_process.execFileSync)("git", ["reset", "-q", "--", "_pr_flow"], { cwd, stdio: "pipe" });
+    }
+    const diff = (0, import_node_child_process.execFileSync)("git", ["diff", "--cached", "--binary"], { cwd, encoding: "utf-8" });
+    fs.writeFileSync(patchPath, diff, "utf-8");
+    return E.right(diff.trim().length > 0);
+  } catch (err) {
+    return E.left({
+      type: "GIT_ERROR",
+      message: isoMessage.wrap(`Failed to export changes.patch: ${err instanceof Error ? err.message : String(err)}`)
+    });
+  }
+}
+function runAgentExecution(params) {
+  const { config: config2, prompt, cwd, outputDir } = params;
+  fs.mkdirSync(outputDir, { recursive: true });
+  const promptPath = path.join(outputDir, "prompt.md");
+  const resultPath = path.join(outputDir, "result.json");
+  const patchPath = path.join(outputDir, "changes.patch");
+  if (config2.workspace.setupCommand.trim().length > 0) {
+    const setup2 = runShell(config2.workspace.setupCommand, cwd);
+    if (!setup2.ok) {
+      return E.left({
+        type: "AGENT_EXECUTION_ERROR",
+        message: isoMessage.wrap(`Workspace setupCommand failed: ${setup2.output}`),
+        exitCode: O3.some(isoCount.wrap(setup2.status)),
+        retryability: O3.none
+      });
+    }
+  }
+  const deadlineMs = Date.now() + config2.agent.timeoutMinutes * 6e4;
+  const { parsedResult, lastRun } = invokeAgentWithFallback({
+    config: config2,
+    prompt,
+    cwd,
+    outputDir,
+    promptPath,
+    resultPath,
+    deadlineMs,
+    resetOnFallback: true
+  });
   if (lastRun && !lastRun.ok && !parsedResult) {
     const retryable = isTransientAgentError(lastRun.output, lastRun.timedOut);
     return E.left({
@@ -39425,53 +39531,102 @@ ${agentRun.output}
       hasChanges: false
     });
   }
-  const verify = runShell(config2.workspace.verifyCommand, cwd);
+  let latestResult = parsedResult;
+  let verify = runShell(config2.workspace.verifyCommand, cwd);
+  let verifyFixAttempt = 0;
+  const maxVerifyRetries = config2.agent.maxVerifyRetries;
+  while (!verify.ok && verifyFixAttempt < maxVerifyRetries) {
+    const remainingMs = deadlineMs - Date.now();
+    if (remainingMs <= 1e4) {
+      console.error("[pr-flow] Stopping verify-fix loop: execution timeout reached.");
+      break;
+    }
+    verifyFixAttempt++;
+    console.error(
+      `[pr-flow] verifyCommand (${config2.workspace.verifyCommand}) failed; starting fix attempt ${String(verifyFixAttempt)}/${String(maxVerifyRetries)}...`
+    );
+    const { changedFiles, currentDiff } = collectWorkingTreeContext(cwd, outputDir);
+    const fixPrompt = buildVerifyFixPrompt({
+      verifyCommand: config2.workspace.verifyCommand,
+      verifyOutput: verify.output.slice(-8e3),
+      attempt: verifyFixAttempt,
+      maxAttempts: maxVerifyRetries,
+      resultFilePath: resultPath,
+      changedFiles,
+      currentDiff,
+      previousResolvedComments: latestResult?.resolvedComments
+    });
+    if (fs.existsSync(resultPath)) {
+      fs.unlinkSync(resultPath);
+    }
+    const fixRun = invokeAgentWithFallback({
+      config: config2,
+      prompt: fixPrompt,
+      cwd,
+      outputDir,
+      promptPath,
+      resultPath,
+      deadlineMs,
+      resetOnFallback: false
+    });
+    if (fixRun.parsedResult?.status === "needs_human") {
+      const patchExport2 = exportChangesPatch(cwd, outputDir, patchPath);
+      if (E.isLeft(patchExport2)) return patchExport2;
+      fs.writeFileSync(resultPath, JSON.stringify(fixRun.parsedResult, null, 2), "utf-8");
+      return E.right({
+        result: fixRun.parsedResult,
+        patchPath,
+        resultPath,
+        hasChanges: patchExport2.right
+      });
+    }
+    if (fixRun.lastRun && !fixRun.lastRun.ok && !fixRun.parsedResult) {
+      console.error("[pr-flow] Verify-fix agent invocation failed; stopping fix loop.");
+      break;
+    }
+    if (fixRun.parsedResult) {
+      const preservedResolved = fixRun.parsedResult.resolvedComments ?? latestResult?.resolvedComments;
+      latestResult = {
+        ...fixRun.parsedResult,
+        ...preservedResolved ? { resolvedComments: preservedResolved } : {}
+      };
+    }
+    verify = runShell(config2.workspace.verifyCommand, cwd);
+  }
+  const patchExport = exportChangesPatch(cwd, outputDir, patchPath);
+  if (E.isLeft(patchExport)) {
+    return patchExport;
+  }
   if (!verify.ok) {
-    const fallback = {
+    const failedResult = {
       status: "failed",
-      summary: parsedResult?.summary ?? "Agent changes failed verification",
-      reason: `verifyCommand (${config2.workspace.verifyCommand}) failed:
+      summary: latestResult?.summary ?? "Agent changes failed verification",
+      reason: `verifyCommand (${config2.workspace.verifyCommand}) failed after ${String(verifyFixAttempt)} fix attempt(s):
 ${verify.output.slice(-1500)}`,
-      testsRun: true
+      testsRun: true,
+      ...latestResult?.filesChanged ? { filesChanged: latestResult.filesChanged } : {},
+      ...latestResult?.resolvedComments ? { resolvedComments: latestResult.resolvedComments } : {}
     };
-    fs.writeFileSync(resultPath, JSON.stringify(fallback, null, 2), "utf-8");
-    fs.writeFileSync(patchPath, "", "utf-8");
+    fs.writeFileSync(resultPath, JSON.stringify(failedResult, null, 2), "utf-8");
     return E.right({
-      result: fallback,
+      result: failedResult,
       patchPath,
       resultPath,
-      hasChanges: false
+      hasChanges: patchExport.right
     });
   }
-  const finalResult = parsedResult ?? {
+  const finalResult = latestResult ?? {
     status: "success",
     summary: "Implemented changes and passed verification.",
     testsRun: true
   };
   fs.writeFileSync(resultPath, JSON.stringify(finalResult, null, 2), "utf-8");
-  try {
-    (0, import_node_child_process.execFileSync)("git", ["add", "-A"], { cwd, stdio: "pipe" });
-    const relOut = path.relative(cwd, outputDir);
-    if (relOut && !relOut.startsWith("..") && !path.isAbsolute(relOut)) {
-      (0, import_node_child_process.execFileSync)("git", ["reset", "-q", "--", relOut], { cwd, stdio: "pipe" });
-    }
-    if (fs.existsSync(path.join(cwd, "_pr_flow"))) {
-      (0, import_node_child_process.execFileSync)("git", ["reset", "-q", "--", "_pr_flow"], { cwd, stdio: "pipe" });
-    }
-    const diff = (0, import_node_child_process.execFileSync)("git", ["diff", "--cached", "--binary"], { cwd, encoding: "utf-8" });
-    fs.writeFileSync(patchPath, diff, "utf-8");
-    return E.right({
-      result: finalResult,
-      patchPath,
-      resultPath,
-      hasChanges: diff.trim().length > 0
-    });
-  } catch (err) {
-    return E.left({
-      type: "GIT_ERROR",
-      message: isoMessage.wrap(`Failed to export changes.patch: ${err instanceof Error ? err.message : String(err)}`)
-    });
-  }
+  return E.right({
+    result: finalResult,
+    patchPath,
+    resultPath,
+    hasChanges: patchExport.right
+  });
 }
 
 // node_modules/universal-user-agent/index.js
@@ -43814,7 +43969,8 @@ var OctokitGitHubAdapter = class {
           title: input2.title,
           body: input2.body,
           head: input2.head,
-          base: input2.base
+          base: input2.base,
+          ...input2.draft !== void 0 ? { draft: input2.draft } : {}
         });
         if (input2.labels && input2.labels.length > 0) {
           await this.octokit.rest.issues.addLabels({
@@ -44306,6 +44462,55 @@ var OctokitGitHubAdapter = class {
       (err) => toGitHubError(`Failed to run setup preflight checks for ${this.owner}/${this.repo}`, err)
     );
   }
+  listPrReviewers(prNumber) {
+    return TE.tryCatch(
+      async () => {
+        const [prRes, reviews] = await Promise.all([
+          this.octokit.rest.pulls.get({
+            owner: this.owner,
+            repo: this.repo,
+            pull_number: prNumber
+          }),
+          paginateRestPages(async (page) => {
+            const res = await this.octokit.rest.pulls.listReviews({
+              owner: this.owner,
+              repo: this.repo,
+              pull_number: prNumber,
+              per_page: 100,
+              page
+            });
+            return res.data;
+          })
+        ]);
+        const prAuthor = prRes.data.user.login;
+        const latestStateByUser = /* @__PURE__ */ new Map();
+        for (const r2 of reviews) {
+          if (!r2.user) continue;
+          const login = r2.user.login;
+          if (!login || r2.user.type === "Bot" || login === prAuthor) continue;
+          if (r2.state === "CHANGES_REQUESTED" || r2.state === "APPROVED" || r2.state === "DISMISSED") {
+            latestStateByUser.set(login, r2.state);
+          }
+        }
+        return Array.from(latestStateByUser.entries()).filter(([, state]) => state === "CHANGES_REQUESTED").map(([login]) => login);
+      },
+      (err) => toGitHubError(`Failed to list reviewers for PR #${String(prNumber)}`, err)
+    );
+  }
+  requestReviewers(prNumber, reviewers) {
+    return TE.tryCatch(
+      async () => {
+        if (reviewers.length === 0) return;
+        await this.octokit.rest.pulls.requestReviewers({
+          owner: this.owner,
+          repo: this.repo,
+          pull_number: prNumber,
+          reviewers: [...reviewers]
+        });
+      },
+      (err) => toGitHubError(`Failed to request reviewers on PR #${String(prNumber)}`, err)
+    );
+  }
 };
 
 // src/domain/config.ts
@@ -44327,6 +44532,7 @@ var PrFlowConfigSchema = external_exports.object({
     model: external_exports.string().default("gemini-3.8-flash"),
     fallbackModels: external_exports.array(external_exports.string().min(1)).default([]),
     maxRetries: external_exports.number().int().min(0).default(3),
+    maxVerifyRetries: external_exports.number().int().min(0).default(10),
     command: external_exports.string().optional(),
     timeoutMinutes: external_exports.number().int().min(1).default(20),
     maxSessionTurns: external_exports.number().int().min(1).default(25),
@@ -49423,6 +49629,62 @@ program2.command("finalize").description("Apply changes.patch, push ai/issue-<N>
         );
         return;
       }
+      const patchContent2 = fs3.existsSync(path3.resolve(opts.patch)) ? fs3.readFileSync(path3.resolve(opts.patch), "utf-8") : "";
+      let wipPrNumber = existingPr;
+      if (patchContent2.trim().length > 0) {
+        try {
+          runGit(["config", "user.name", "pr-flow[bot]"], cwd);
+          runGit(["config", "user.email", "pr-flow[bot]@users.noreply.github.com"], cwd);
+          if (existingPr) {
+            runGit(["fetch", "origin", branch], cwd);
+            runGit(["checkout", "-B", branch, `origin/${branch}`], cwd);
+          } else {
+            runGit(["fetch", "origin", config2.baseBranch], cwd);
+            runGit(["checkout", "-B", branch, `origin/${config2.baseBranch}`], cwd);
+          }
+          runGit(["apply", "--index", path3.resolve(opts.patch)], cwd);
+          runGit(["commit", "-m", `wip: partial changes for #${String(issueNumber)} (${agentResult.status})`], cwd);
+          runGit(existingPr ? ["push", "origin", branch] : ["push", "--force", "origin", branch], cwd);
+          if (!wipPrNumber) {
+            const openPrs = await runOrExit(github.listOpenPrsForIssue(issueNumber));
+            const firstOpenPr = openPrs[0];
+            if (firstOpenPr) {
+              wipPrNumber = firstOpenPr.number;
+            } else {
+              const createdDraft = await runOrExit(
+                github.createPullRequest({
+                  title: `[WIP] ${isoTitle.unwrap(issue2.title)} (#${String(issueNumber)})`,
+                  body: `Closes #${String(issueNumber)}
+
+> [!WARNING]
+> Automated verification failed or requires human input. Partial changes have been pushed to \`${branch}\`.
+
+**Reason:** ${agentResult.reason ?? agentResult.summary}
+
+---
+*Automated by \`pr-flow\`.*`,
+                  head: branch,
+                  base: config2.baseBranch,
+                  labels: [isoLabelName.unwrap(AI_MANAGED_LABEL)],
+                  draft: true
+                })
+              );
+              wipPrNumber = createdDraft.number;
+            }
+          } else {
+            await github.addPrComment(
+              wipPrNumber,
+              `Pushed partial WIP changes to \`${branch}\`, but verification failed or requires human input.
+
+**Reason:** ${agentResult.reason ?? agentResult.summary}`
+            )();
+          }
+        } catch (err) {
+          console.error(
+            `[pr-flow] Warning: Failed to push partial WIP changes for #${String(issueNumber)}: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+      }
       const event = agentResult.status === "needs_human" ? {
         type: "NEEDS_HUMAN_DETECTED",
         reason: isoMessage.wrap(agentResult.reason ?? agentResult.summary)
@@ -49432,7 +49694,13 @@ program2.command("finalize").description("Apply changes.patch, push ai/issue-<N>
       };
       const transition3 = transitionIssue(issue2, event);
       await runOrExit(executeEffects(transition3.effects, github));
-      console.log(JSON.stringify({ finalized: true, status: transition3.nextStatus }));
+      console.log(
+        JSON.stringify({
+          finalized: true,
+          status: transition3.nextStatus,
+          ...wipPrNumber ? { prNumber: wipPrNumber, draft: !existingPr } : {}
+        })
+      );
       return;
     }
     const patchContent = readTextFileOrFail(opts.patch, "changes.patch");
@@ -49528,6 +49796,15 @@ Replied to and resolved ${String(followUp.resolvedCount)} review comment thread(
 **Summary:** ${agentResult.summary}${resolvedNote}`
         )
       );
+      const reviewersRes = await github.listPrReviewers(prNumber)();
+      if (E8.isRight(reviewersRes) && reviewersRes.right.length > 0) {
+        const reqRes = await github.requestReviewers(prNumber, reviewersRes.right)();
+        if (E8.isLeft(reqRes)) {
+          console.error(
+            `[pr-flow] Warning: Failed to re-request reviewers (${reviewersRes.right.join(", ")}): ${formatDomainError(reqRes.left)}`
+          );
+        }
+      }
     }
     const transition2 = transitionIssue(issue2, {
       type: "EXECUTION_SUCCEEDED",

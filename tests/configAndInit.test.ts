@@ -42,6 +42,7 @@ workspace:
       expect(res.right.agent.provider).toBe('gemini');
       expect(res.right.agent.fallbackModels).toEqual([]);
       expect(res.right.agent.maxRetries).toBe(3);
+      expect(res.right.agent.maxVerifyRetries).toBe(10);
       expect(res.right.agent.maxSessionTurns).toBe(25);
       expect(res.right.agent.compressionThreshold).toBe(0.2);
       expect(res.right.triggers.reviewMode).toBe('changes_requested');

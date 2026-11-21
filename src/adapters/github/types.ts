@@ -14,6 +14,7 @@ export type CreatePullRequestInput = {
   readonly head: string;
   readonly base: string;
   readonly labels?: ReadonlyArray<string>;
+  readonly draft?: boolean;
 };
 
 export type PullRequestSummary = {
@@ -105,4 +106,6 @@ export type GitHubPort = {
   getPrReviewFeedback(prNumber: number): TE.TaskEither<DomainError, PrReviewFeedback>;
   replyToReviewThread(threadId: string, body: string): TE.TaskEither<DomainError, void>;
   resolveReviewThread(threadId: string): TE.TaskEither<DomainError, void>;
+  listPrReviewers(prNumber: number): TE.TaskEither<DomainError, ReadonlyArray<string>>;
+  requestReviewers(prNumber: number, reviewers: ReadonlyArray<string>): TE.TaskEither<DomainError, void>;
 };

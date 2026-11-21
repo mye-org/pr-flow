@@ -694,6 +694,59 @@ program
           return;
         }
 
+        const patchContent = fs.existsSync(path.resolve(opts.patch))
+          ? fs.readFileSync(path.resolve(opts.patch), 'utf-8')
+          : '';
+        let wipPrNumber = existingPr;
+
+        if (patchContent.trim().length > 0) {
+          try {
+            runGit(['config', 'user.name', 'pr-flow[bot]'], cwd);
+            runGit(['config', 'user.email', 'pr-flow[bot]@users.noreply.github.com'], cwd);
+
+            if (existingPr) {
+              runGit(['fetch', 'origin', branch], cwd);
+              runGit(['checkout', '-B', branch, `origin/${branch}`], cwd);
+            } else {
+              runGit(['fetch', 'origin', config.baseBranch], cwd);
+              runGit(['checkout', '-B', branch, `origin/${config.baseBranch}`], cwd);
+            }
+
+            runGit(['apply', '--index', path.resolve(opts.patch)], cwd);
+            runGit(['commit', '-m', `wip: partial changes for #${String(issueNumber)} (${agentResult.status})`], cwd);
+            runGit(existingPr ? ['push', 'origin', branch] : ['push', '--force', 'origin', branch], cwd);
+
+            if (!wipPrNumber) {
+              const openPrs = await runOrExit(github.listOpenPrsForIssue(issueNumber));
+              const firstOpenPr = openPrs[0];
+              if (firstOpenPr) {
+                wipPrNumber = firstOpenPr.number;
+              } else {
+                const createdDraft = await runOrExit(
+                  github.createPullRequest({
+                    title: `[WIP] ${isoTitle.unwrap(issue.title)} (#${String(issueNumber)})`,
+                    body: `Closes #${String(issueNumber)}\n\n> [!WARNING]\n> Automated verification failed or requires human input. Partial changes have been pushed to \`${branch}\`.\n\n**Reason:** ${agentResult.reason ?? agentResult.summary}\n\n---\n*Automated by \`pr-flow\`.*`,
+                    head: branch,
+                    base: config.baseBranch,
+                    labels: [isoLabelName.unwrap(AI_MANAGED_LABEL)],
+                    draft: true,
+                  }),
+                );
+                wipPrNumber = createdDraft.number;
+              }
+            } else {
+              await github.addPrComment(
+                wipPrNumber,
+                `Pushed partial WIP changes to \`${branch}\`, but verification failed or requires human input.\n\n**Reason:** ${agentResult.reason ?? agentResult.summary}`,
+              )();
+            }
+          } catch (err) {
+            console.error(
+              `[pr-flow] Warning: Failed to push partial WIP changes for #${String(issueNumber)}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
+
         const event =
           agentResult.status === 'needs_human'
             ? ({
@@ -707,7 +760,13 @@ program
 
         const transition = transitionIssue(issue, event);
         await runOrExit(executeEffects(transition.effects, github));
-        console.log(JSON.stringify({ finalized: true, status: transition.nextStatus }));
+        console.log(
+          JSON.stringify({
+            finalized: true,
+            status: transition.nextStatus,
+            ...(wipPrNumber ? { prNumber: wipPrNumber, draft: !existingPr } : {}),
+          }),
+        );
         return;
       }
 
@@ -808,6 +867,16 @@ program
             `Applied review fixes on \`${branch}\`.\n\n**Summary:** ${agentResult.summary}${resolvedNote}`,
           ),
         );
+
+        const reviewersRes = await github.listPrReviewers(prNumber)();
+        if (E.isRight(reviewersRes) && reviewersRes.right.length > 0) {
+          const reqRes = await github.requestReviewers(prNumber, reviewersRes.right)();
+          if (E.isLeft(reqRes)) {
+            console.error(
+              `[pr-flow] Warning: Failed to re-request reviewers (${reviewersRes.right.join(', ')}): ${formatDomainError(reqRes.left)}`,
+            );
+          }
+        }
       }
 
       const transition = transitionIssue(issue, {

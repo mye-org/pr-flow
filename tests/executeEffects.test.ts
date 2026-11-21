@@ -52,6 +52,8 @@ const mockGithub = (overrides: Partial<GitHubPort> = {}) => ({
   getPrReviewFeedback: vi.fn(),
   replyToReviewThread: vi.fn(),
   resolveReviewThread: vi.fn(),
+  listPrReviewers: vi.fn(),
+  requestReviewers: vi.fn(),
   ...overrides,
 });
 

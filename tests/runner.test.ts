@@ -129,6 +129,7 @@ describe('buildGeminiSettings', () => {
           model: 'gemini-3.8-flash',
           fallbackModels: ['gemini-3.5-flash-lite'],
           maxRetries: 3,
+          maxVerifyRetries: 10,
           timeoutMinutes: 20,
           maxSessionTurns: 20,
           compressionThreshold: 0.2,
@@ -187,6 +188,7 @@ describe('runAgentExecution', () => {
               'printf \'{"status":"needs_human","summary":"Blocked","reason":"Need API spec","testsRun":false}\' > "$PR_FLOW_RESULT_FILE"',
             fallbackModels: [],
             maxRetries: 1,
+            maxVerifyRetries: 2,
             timeoutMinutes: 5,
             maxSessionTurns: 10,
             compressionThreshold: 0.2,
@@ -209,6 +211,136 @@ describe('runAgentExecution', () => {
         expect(res.right.result.reason).toBe('Need API spec');
         expect(res.right.hasChanges).toBe(false);
         expect(fs.existsSync(res.right.patchPath)).toBe(true);
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('loops verifyCommand failures back to the agent until fixed and preserves resolvedComments', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const tmpDir = pipe(path.join(os.tmpdir(), 'pr-flow-verify-fix-'), (prefix: string) =>
+      fs.mkdtempSync(prefix),
+    );
+    try {
+      execFileSync('git', ['init'], { cwd: tmpDir, stdio: 'pipe' });
+      execFileSync('git', ['config', 'user.name', 'Test'], { cwd: tmpDir, stdio: 'pipe' });
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tmpDir, stdio: 'pipe' });
+      fs.writeFileSync(path.join(tmpDir, 'app.txt'), 'initial\n', 'utf-8');
+      execFileSync('git', ['add', '-A'], { cwd: tmpDir, stdio: 'pipe' });
+      execFileSync('git', ['commit', '-m', 'init'], { cwd: tmpDir, stdio: 'pipe' });
+
+      // First run writes 'broken\n' and resolvedComments; second run (fix) writes 'fixed\n'
+      const agentScript = `
+if [ ! -f app.txt ] || grep -q "initial" app.txt; then
+  printf 'broken\\n' > app.txt
+  printf '{"status":"success","summary":"Initial impl","testsRun":true,"resolvedComments":[{"threadId":"T1","reply":"Fixed"}]}' > "$PR_FLOW_RESULT_FILE"
+else
+  printf 'fixed\\n' > app.txt
+  printf '{"status":"success","summary":"Fixed lint","testsRun":true}' > "$PR_FLOW_RESULT_FILE"
+fi
+`;
+
+      const res = runAgentExecution({
+        config: {
+          version: 1,
+          wipLimit: 4,
+          baseBranch: 'main',
+          statusFieldName: 'pr-flow-status',
+          workspace: { setupCommand: '', verifyCommand: 'grep -q "^fixed$" app.txt' },
+          agent: {
+            provider: 'custom',
+            model: 'custom',
+            command: agentScript,
+            fallbackModels: [],
+            maxRetries: 1,
+            maxVerifyRetries: 3,
+            timeoutMinutes: 5,
+            maxSessionTurns: 10,
+            compressionThreshold: 0.2,
+          },
+          triggers: {
+            reviewMode: 'changes_requested',
+            autoPickup: true,
+            autoMergeOnApprove: true,
+            mergeMethod: 'squash',
+          },
+        },
+        prompt: 'Implement feature',
+        cwd: tmpDir,
+        outputDir: path.join(tmpDir, 'out'),
+      });
+
+      expect(E.isRight(res)).toBe(true);
+      if (E.isRight(res)) {
+        expect(res.right.result.status).toBe('success');
+        expect(res.right.result.summary).toBe('Fixed lint');
+        expect(res.right.result.resolvedComments).toEqual([{ threadId: 'T1', reply: 'Fixed' }]);
+        expect(res.right.hasChanges).toBe(true);
+        const patch = fs.readFileSync(res.right.patchPath, 'utf-8');
+        expect(patch).toContain('+fixed');
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('exports partial changes.patch when verifyCommand still fails after maxVerifyRetries', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const tmpDir = pipe(path.join(os.tmpdir(), 'pr-flow-verify-fail-'), (prefix: string) =>
+      fs.mkdtempSync(prefix),
+    );
+    try {
+      execFileSync('git', ['init'], { cwd: tmpDir, stdio: 'pipe' });
+      execFileSync('git', ['config', 'user.name', 'Test'], { cwd: tmpDir, stdio: 'pipe' });
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tmpDir, stdio: 'pipe' });
+      fs.writeFileSync(path.join(tmpDir, 'app.txt'), 'initial\n', 'utf-8');
+      execFileSync('git', ['add', '-A'], { cwd: tmpDir, stdio: 'pipe' });
+      execFileSync('git', ['commit', '-m', 'init'], { cwd: tmpDir, stdio: 'pipe' });
+
+      const agentScript = `
+printf 'partial-wip\\n' > app.txt
+printf '{"status":"success","summary":"Partial work","testsRun":true}' > "$PR_FLOW_RESULT_FILE"
+`;
+
+      const res = runAgentExecution({
+        config: {
+          version: 1,
+          wipLimit: 4,
+          baseBranch: 'main',
+          statusFieldName: 'pr-flow-status',
+          workspace: { setupCommand: '', verifyCommand: 'echo "lint error" >&2 && exit 1' },
+          agent: {
+            provider: 'custom',
+            model: 'custom',
+            command: agentScript,
+            fallbackModels: [],
+            maxRetries: 1,
+            maxVerifyRetries: 1,
+            timeoutMinutes: 5,
+            maxSessionTurns: 10,
+            compressionThreshold: 0.2,
+          },
+          triggers: {
+            reviewMode: 'changes_requested',
+            autoPickup: true,
+            autoMergeOnApprove: true,
+            mergeMethod: 'squash',
+          },
+        },
+        prompt: 'Implement feature',
+        cwd: tmpDir,
+        outputDir: path.join(tmpDir, 'out'),
+      });
+
+      expect(E.isRight(res)).toBe(true);
+      if (E.isRight(res)) {
+        expect(res.right.result.status).toBe('failed');
+        expect(res.right.result.reason).toContain('after 1 fix attempt(s)');
+        expect(res.right.result.reason).toContain('lint error');
+        expect(res.right.hasChanges).toBe(true);
+        const patch = fs.readFileSync(res.right.patchPath, 'utf-8');
+        expect(patch).toContain('+partial-wip');
       }
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });

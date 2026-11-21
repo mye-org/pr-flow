@@ -22,6 +22,7 @@ export const PrFlowConfigSchema = z.object({
       model: z.string().default('gemini-3.8-flash'),
       fallbackModels: z.array(z.string().min(1)).default([]),
       maxRetries: z.number().int().min(0).default(3),
+      maxVerifyRetries: z.number().int().min(0).default(10),
       command: z.string().optional(),
       timeoutMinutes: z.number().int().min(1).default(20),
       maxSessionTurns: z.number().int().min(1).default(25),

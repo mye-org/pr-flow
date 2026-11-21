@@ -979,6 +979,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
           body: input.body,
           head: input.head,
           base: input.base,
+          ...(input.draft !== undefined ? { draft: input.draft } : {}),
         });
         if (input.labels && input.labels.length > 0) {
           await this.octokit.rest.issues.addLabels({
@@ -1566,6 +1567,59 @@ export class OctokitGitHubAdapter implements GitHubPort {
         return results;
       },
       (err) => toGitHubError(`Failed to run setup preflight checks for ${this.owner}/${this.repo}`, err),
+    );
+  }
+
+  listPrReviewers(prNumber: number) {
+    return TE.tryCatch(
+      async () => {
+        const [prRes, reviews] = await Promise.all([
+          this.octokit.rest.pulls.get({
+            owner: this.owner,
+            repo: this.repo,
+            pull_number: prNumber,
+          }),
+          paginateRestPages(async (page) => {
+            const res = await this.octokit.rest.pulls.listReviews({
+              owner: this.owner,
+              repo: this.repo,
+              pull_number: prNumber,
+              per_page: 100,
+              page,
+            });
+            return res.data;
+          }),
+        ]);
+        const prAuthor = prRes.data.user.login;
+        const latestStateByUser = new Map<string, string>();
+        for (const r of reviews) {
+          if (!r.user) continue;
+          const login = r.user.login;
+          if (!login || r.user.type === 'Bot' || login === prAuthor) continue;
+          if (r.state === 'CHANGES_REQUESTED' || r.state === 'APPROVED' || r.state === 'DISMISSED') {
+            latestStateByUser.set(login, r.state);
+          }
+        }
+        return Array.from(latestStateByUser.entries())
+          .filter(([, state]) => state === 'CHANGES_REQUESTED')
+          .map(([login]) => login);
+      },
+      (err) => toGitHubError(`Failed to list reviewers for PR #${String(prNumber)}`, err),
+    );
+  }
+
+  requestReviewers(prNumber: number, reviewers: ReadonlyArray<string>) {
+    return TE.tryCatch(
+      async () => {
+        if (reviewers.length === 0) return;
+        await this.octokit.rest.pulls.requestReviewers({
+          owner: this.owner,
+          repo: this.repo,
+          pull_number: prNumber,
+          reviewers: [...reviewers],
+        });
+      },
+      (err) => toGitHubError(`Failed to request reviewers on PR #${String(prNumber)}`, err),
     );
   }
 }

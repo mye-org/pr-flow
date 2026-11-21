@@ -7,6 +7,7 @@ import type { PrFlowConfig } from '../../domain/config.js';
 import type { DomainError } from '../../domain/errors.js';
 import { AgentResultSchema, type AgentResult } from '../../domain/issue.js';
 import { isoCount, isoMessage } from '../../domain/newtypes.js';
+import { buildVerifyFixPrompt } from './prompts.js';
 
 export type AgentRunOutput = {
   result: AgentResult;
@@ -412,31 +413,18 @@ function withTemporaryGeminiSettings<T>(
   }
 }
 
-export function runAgentExecution(params: {
-  config: PrFlowConfig;
-  prompt: string;
-  cwd: string;
-  outputDir: string;
+function invokeAgentWithFallback(params: {
+  readonly config: PrFlowConfig;
+  readonly prompt: string;
+  readonly cwd: string;
+  readonly outputDir: string;
+  readonly promptPath: string;
+  readonly resultPath: string;
+  readonly deadlineMs: number;
+  readonly resetOnFallback: boolean;
 }) {
-  const { config, prompt, cwd, outputDir } = params;
-  fs.mkdirSync(outputDir, { recursive: true });
-
-  const promptPath = path.join(outputDir, 'prompt.md');
-  const resultPath = path.join(outputDir, 'result.json');
-  const patchPath = path.join(outputDir, 'changes.patch');
+  const { config, prompt, cwd, outputDir, promptPath, resultPath, deadlineMs, resetOnFallback } = params;
   fs.writeFileSync(promptPath, prompt, 'utf-8');
-
-  if (config.workspace.setupCommand.trim().length > 0) {
-    const setup = runShell(config.workspace.setupCommand, cwd);
-    if (!setup.ok) {
-      return E.left<DomainError, AgentRunOutput>({
-        type: 'AGENT_EXECUTION_ERROR',
-        message: isoMessage.wrap(`Workspace setupCommand failed: ${setup.output}`),
-        exitCode: O.some(isoCount.wrap(setup.status)),
-        retryability: O.none,
-      });
-    }
-  }
 
   const nodeOpts = [process.env.NODE_OPTIONS, '--dns-result-order=ipv4first']
     .filter(Boolean)
@@ -447,9 +435,7 @@ export function runAgentExecution(params: {
       ? Array.from(new Set([config.agent.model, ...config.agent.fallbackModels]))
       : ['custom'];
 
-  const deadlineMs = Date.now() + config.agent.timeoutMinutes * 60_000;
-
-  const { parsedResult, lastRun } = withTemporaryGeminiSettings(cwd, config, () => {
+  return withTemporaryGeminiSettings(cwd, config, () => {
     let currentResult: AgentResult | null = null;
     let currentLastRun: ProcessRunResult | null = null;
 
@@ -462,7 +448,9 @@ export function runAgentExecution(params: {
 
       if (idx > 0) {
         console.error(`[pr-flow] Falling back to model "${modelName}" after error...`);
-        resetWorkingTree(cwd, outputDir);
+        if (resetOnFallback) {
+          resetWorkingTree(cwd, outputDir);
+        }
         if (fs.existsSync(resultPath)) fs.unlinkSync(resultPath);
       }
 
@@ -523,6 +511,109 @@ export function runAgentExecution(params: {
 
     return { parsedResult: currentResult, lastRun: currentLastRun };
   });
+}
+
+function collectWorkingTreeContext(cwd: string, outputDir: string) {
+  try {
+    const relOut = path.relative(cwd, outputDir);
+    const excludeArgs = [
+      ':(exclude)_pr_flow',
+      ':(exclude).gemini',
+      ...(relOut && !relOut.startsWith('..') && !path.isAbsolute(relOut)
+        ? [`:(exclude)${relOut}`]
+        : []),
+    ];
+    const trackedOut = execFileSync(
+      'git',
+      ['diff', '--name-only', 'HEAD', '--', '.', ...excludeArgs],
+      { cwd, encoding: 'utf-8' },
+    );
+    const untrackedOut = execFileSync(
+      'git',
+      ['ls-files', '--others', '--exclude-standard', '--', '.', ...excludeArgs],
+      { cwd, encoding: 'utf-8' },
+    );
+    const changedFiles = Array.from(
+      new Set(
+        `${trackedOut}\n${untrackedOut}`
+          .split('\n')
+          .map((f) => f.trim())
+          .filter(Boolean),
+      ),
+    );
+    const rawDiff = execFileSync('git', ['diff', 'HEAD', '--', '.', ...excludeArgs], {
+      cwd,
+      encoding: 'utf-8',
+    });
+    const MAX_DIFF_CHARS = 12_000;
+    const currentDiff =
+      rawDiff.length > MAX_DIFF_CHARS
+        ? `${rawDiff.slice(0, MAX_DIFF_CHARS)}\n... [diff truncated at ${String(MAX_DIFF_CHARS)} chars]`
+        : rawDiff;
+    return { changedFiles, currentDiff };
+  } catch {
+    return { changedFiles: undefined, currentDiff: undefined };
+  }
+}
+
+function exportChangesPatch(cwd: string, outputDir: string, patchPath: string) {
+  try {
+    execFileSync('git', ['add', '-A'], { cwd, stdio: 'pipe' });
+    const relOut = path.relative(cwd, outputDir);
+    if (relOut && !relOut.startsWith('..') && !path.isAbsolute(relOut)) {
+      execFileSync('git', ['reset', '-q', '--', relOut], { cwd, stdio: 'pipe' });
+    }
+    if (fs.existsSync(path.join(cwd, '_pr_flow'))) {
+      execFileSync('git', ['reset', '-q', '--', '_pr_flow'], { cwd, stdio: 'pipe' });
+    }
+    const diff = execFileSync('git', ['diff', '--cached', '--binary'], { cwd, encoding: 'utf-8' });
+    fs.writeFileSync(patchPath, diff, 'utf-8');
+    return E.right<DomainError, boolean>(diff.trim().length > 0);
+  } catch (err) {
+    return E.left<DomainError, boolean>({
+      type: 'GIT_ERROR',
+      message: isoMessage.wrap(`Failed to export changes.patch: ${err instanceof Error ? err.message : String(err)}`),
+    });
+  }
+}
+
+export function runAgentExecution(params: {
+  config: PrFlowConfig;
+  prompt: string;
+  cwd: string;
+  outputDir: string;
+}) {
+  const { config, prompt, cwd, outputDir } = params;
+  fs.mkdirSync(outputDir, { recursive: true });
+
+  const promptPath = path.join(outputDir, 'prompt.md');
+  const resultPath = path.join(outputDir, 'result.json');
+  const patchPath = path.join(outputDir, 'changes.patch');
+
+  if (config.workspace.setupCommand.trim().length > 0) {
+    const setup = runShell(config.workspace.setupCommand, cwd);
+    if (!setup.ok) {
+      return E.left<DomainError, AgentRunOutput>({
+        type: 'AGENT_EXECUTION_ERROR',
+        message: isoMessage.wrap(`Workspace setupCommand failed: ${setup.output}`),
+        exitCode: O.some(isoCount.wrap(setup.status)),
+        retryability: O.none,
+      });
+    }
+  }
+
+  const deadlineMs = Date.now() + config.agent.timeoutMinutes * 60_000;
+
+  const { parsedResult, lastRun } = invokeAgentWithFallback({
+    config,
+    prompt,
+    cwd,
+    outputDir,
+    promptPath,
+    resultPath,
+    deadlineMs,
+    resetOnFallback: true,
+  });
 
   if (lastRun && !lastRun.ok && !parsedResult) {
     const retryable = isTransientAgentError(lastRun.output, lastRun.timedOut);
@@ -546,54 +637,113 @@ export function runAgentExecution(params: {
     });
   }
 
-  // Run deterministic workspace.verifyCommand regardless of agent claims
-  const verify = runShell(config.workspace.verifyCommand, cwd);
+  let latestResult: AgentResult | null = parsedResult;
+  let verify = runShell(config.workspace.verifyCommand, cwd);
+  let verifyFixAttempt = 0;
+  const maxVerifyRetries = config.agent.maxVerifyRetries;
+
+  while (!verify.ok && verifyFixAttempt < maxVerifyRetries) {
+    const remainingMs = deadlineMs - Date.now();
+    if (remainingMs <= 10_000) {
+      console.error('[pr-flow] Stopping verify-fix loop: execution timeout reached.');
+      break;
+    }
+
+    verifyFixAttempt++;
+    console.error(
+      `[pr-flow] verifyCommand (${config.workspace.verifyCommand}) failed; starting fix attempt ${String(verifyFixAttempt)}/${String(maxVerifyRetries)}...`,
+    );
+
+    const { changedFiles, currentDiff } = collectWorkingTreeContext(cwd, outputDir);
+    const fixPrompt = buildVerifyFixPrompt({
+      verifyCommand: config.workspace.verifyCommand,
+      verifyOutput: verify.output.slice(-8000),
+      attempt: verifyFixAttempt,
+      maxAttempts: maxVerifyRetries,
+      resultFilePath: resultPath,
+      changedFiles,
+      currentDiff,
+      previousResolvedComments: latestResult?.resolvedComments,
+    });
+
+    if (fs.existsSync(resultPath)) {
+      fs.unlinkSync(resultPath);
+    }
+
+    const fixRun = invokeAgentWithFallback({
+      config,
+      prompt: fixPrompt,
+      cwd,
+      outputDir,
+      promptPath,
+      resultPath,
+      deadlineMs,
+      resetOnFallback: false,
+    });
+
+    if (fixRun.parsedResult?.status === 'needs_human') {
+      const patchExport = exportChangesPatch(cwd, outputDir, patchPath);
+      if (E.isLeft(patchExport)) return patchExport;
+      fs.writeFileSync(resultPath, JSON.stringify(fixRun.parsedResult, null, 2), 'utf-8');
+      return E.right<DomainError, AgentRunOutput>({
+        result: fixRun.parsedResult,
+        patchPath,
+        resultPath,
+        hasChanges: patchExport.right,
+      });
+    }
+
+    if (fixRun.lastRun && !fixRun.lastRun.ok && !fixRun.parsedResult) {
+      console.error('[pr-flow] Verify-fix agent invocation failed; stopping fix loop.');
+      break;
+    }
+
+    if (fixRun.parsedResult) {
+      const preservedResolved =
+        fixRun.parsedResult.resolvedComments ?? latestResult?.resolvedComments;
+      latestResult = {
+        ...fixRun.parsedResult,
+        ...(preservedResolved ? { resolvedComments: preservedResolved } : {}),
+      };
+    }
+
+    verify = runShell(config.workspace.verifyCommand, cwd);
+  }
+
+  const patchExport = exportChangesPatch(cwd, outputDir, patchPath);
+  if (E.isLeft(patchExport)) {
+    return patchExport;
+  }
+
   if (!verify.ok) {
-    const fallback: AgentResult = {
+    const failedResult: AgentResult = {
       status: 'failed',
-      summary: parsedResult?.summary ?? 'Agent changes failed verification',
-      reason: `verifyCommand (${config.workspace.verifyCommand}) failed:\n${verify.output.slice(-1500)}`,
+      summary: latestResult?.summary ?? 'Agent changes failed verification',
+      reason: `verifyCommand (${config.workspace.verifyCommand}) failed after ${String(verifyFixAttempt)} fix attempt(s):\n${verify.output.slice(-1500)}`,
       testsRun: true,
+      ...(latestResult?.filesChanged ? { filesChanged: latestResult.filesChanged } : {}),
+      ...(latestResult?.resolvedComments ? { resolvedComments: latestResult.resolvedComments } : {}),
     };
-    fs.writeFileSync(resultPath, JSON.stringify(fallback, null, 2), 'utf-8');
-    fs.writeFileSync(patchPath, '', 'utf-8');
+    fs.writeFileSync(resultPath, JSON.stringify(failedResult, null, 2), 'utf-8');
     return E.right<DomainError, AgentRunOutput>({
-      result: fallback,
+      result: failedResult,
       patchPath,
       resultPath,
-      hasChanges: false,
+      hasChanges: patchExport.right,
     });
   }
 
-  const finalResult: AgentResult = parsedResult ?? {
+  const finalResult: AgentResult = latestResult ?? {
     status: 'success',
     summary: 'Implemented changes and passed verification.',
     testsRun: true,
   };
   fs.writeFileSync(resultPath, JSON.stringify(finalResult, null, 2), 'utf-8');
 
-  // Stage untracked files (excluding outputDir and _pr_flow) and export full git diff into changes.patch
-  try {
-    execFileSync('git', ['add', '-A'], { cwd, stdio: 'pipe' });
-    const relOut = path.relative(cwd, outputDir);
-    if (relOut && !relOut.startsWith('..') && !path.isAbsolute(relOut)) {
-      execFileSync('git', ['reset', '-q', '--', relOut], { cwd, stdio: 'pipe' });
-    }
-    if (fs.existsSync(path.join(cwd, '_pr_flow'))) {
-      execFileSync('git', ['reset', '-q', '--', '_pr_flow'], { cwd, stdio: 'pipe' });
-    }
-    const diff = execFileSync('git', ['diff', '--cached', '--binary'], { cwd, encoding: 'utf-8' });
-    fs.writeFileSync(patchPath, diff, 'utf-8');
-    return E.right<DomainError, AgentRunOutput>({
-      result: finalResult,
-      patchPath,
-      resultPath,
-      hasChanges: diff.trim().length > 0,
-    });
-  } catch (err) {
-    return E.left<DomainError, AgentRunOutput>({
-      type: 'GIT_ERROR',
-      message: isoMessage.wrap(`Failed to export changes.patch: ${err instanceof Error ? err.message : String(err)}`),
-    });
-  }
+  return E.right<DomainError, AgentRunOutput>({
+    result: finalResult,
+    patchPath,
+    resultPath,
+    hasChanges: patchExport.right,
+  });
 }

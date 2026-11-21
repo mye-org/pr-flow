@@ -125,3 +125,50 @@ ${issueBodySection}${changedFilesSection}${diffSection}
 ${commentsBlock}
 `;
 }
+
+export function buildVerifyFixPrompt(params: {
+  readonly verifyCommand: string;
+  readonly verifyOutput: string;
+  readonly attempt: number;
+  readonly maxAttempts: number;
+  readonly resultFilePath: string;
+  readonly changedFiles?: ReadonlyArray<string>;
+  readonly currentDiff?: string;
+  readonly previousResolvedComments?: ReadonlyArray<{ readonly threadId: string; readonly reply: string }>;
+}) {
+  const changedFilesSection =
+    params.changedFiles && params.changedFiles.length > 0
+      ? `\n## Currently Changed Files\n\`\`\`\n${params.changedFiles.join('\n')}\n\`\`\`\n`
+      : '';
+
+  const diffSection =
+    params.currentDiff && params.currentDiff.trim().length > 0
+      ? `\n## Current Working Tree Diff\n\`\`\`diff\n${params.currentDiff.trim()}\n\`\`\`\n`
+      : '';
+
+  const resolvedNote =
+    params.previousResolvedComments && params.previousResolvedComments.length > 0
+      ? `\n   - Preserve \`"resolvedComments"\` in \`result.json\` for the review threads already addressed: ${JSON.stringify(params.previousResolvedComments)}`
+      : '';
+
+  return `You are an autonomous software engineer fixing verification (linting, typechecking, and/or test) failures in the current working tree.
+
+## Verification Failure (Fix Attempt ${String(params.attempt)}/${String(params.maxAttempts)})
+The verification command \`${params.verifyCommand}\` failed with the following output:
+\`\`\`
+${params.verifyOutput}
+\`\`\`
+${changedFilesSection}${diffSection}
+## Strict Execution Rules
+1. Fix all linting, typechecking, formatting, and test errors shown above in the current working tree.
+2. Do NOT run \`git push\`, \`gh\`, or modify git branches.
+3. Re-run the full verification command to confirm all checks pass before finishing:
+   \`${params.verifyCommand}\`
+4. Write a structured JSON file to \`${params.resultFilePath}\` (or output it as your final JSON response):
+   - On success:
+     \`{"status":"success","summary":"<concise summary of fixes>","testsRun":true,"filesChanged":["..."]}\`${resolvedNote}
+   - If blocked and human input is required:
+     \`{"status":"needs_human","summary":"<what was attempted>","reason":"<specific blocker>","testsRun":true}\`
+`;
+}
+

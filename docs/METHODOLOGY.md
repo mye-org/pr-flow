@@ -36,6 +36,9 @@ Container `pr-flow-status` is computed deterministically from child sub-issues:
 ## 4. Lazy Branching & Split-Job Security
 
 1. **Job 1 (`claim`)**: Runs deterministic FSM guards (`isExecutableLeaf`, `pr-flow-status == ready`, `allBlockersClosed`, `openPrCount === 0`, `wipCount < wipLimit`) and sets `pr-flow-status` to `in-progress`.
-2. **Job 2 (`execute`)**: Runs the AI coding agent + `workspace.verifyCommand` with **zero `issues: write` / `contents: write` permissions**, exporting `changes.patch` + `result.json` as workflow artifacts.
-3. **Job 3 (`finalize`)**: Creates `ai/issue-<N>` from latest `main`, applies `changes.patch`, pushes branch, opens 1 PR (`Closes #<N>`, label `ai-managed`), and sets `pr-flow-status` to `review-pending` (or `needs-human` on failure).
-4. **Review Follow-Ups & Squash Merge**: Follow-up fixes append commits to `ai/issue-<N>`. Squash & Merge keeps `main` linear (**1 Issue = 1 PR = 1 Commit**).
+2. **Job 2 (`execute`)**: Runs with **zero `issues: write` / `contents: write` permissions**, executing `workspace.setupCommand`, the AI agent (with `agent.fallbackModels` + working-tree reset on transient/unavailable model errors), and `workspace.verifyCommand` in an automatic verify-and-fix loop (up to `agent.maxVerifyRetries` attempts), exporting `changes.patch` + `result.json` (plus `review-threads.json` in review mode) as workflow artifacts.
+3. **Job 3 (`finalize`)**:
+   - **On `success`**: Creates `ai/issue-<N>` from latest `baseBranch`, applies `changes.patch`, pushes the branch, opens 1 PR (`Closes #<N>`, label `ai-managed`), and sets `pr-flow-status` to `review-pending`.
+   - **On `retryable`**: Re-queues `pr-flow-status` to `ready` (up to `agent.maxRetries`) or `needs-human` once exhausted.
+   - **On `failed` / `needs_human`**: Transitions `pr-flow-status` to `needs-human`, and if `changes.patch` is non-empty, pushes partial commits to `ai/issue-<N>` and opens a **`[WIP]` draft PR** for inspection.
+4. **Review Follow-Ups & Merge**: Follow-up fixes append commits to `ai/issue-<N>`, reply to and resolve addressed inline review threads, and re-request `CHANGES_REQUESTED` reviewers. On approval (when `triggers.autoMergeOnApprove: true`), `reusable-merge.yml` merges using `triggers.mergeMethod` (default `squash`, keeping **1 Issue = 1 PR = 1 Commit**).

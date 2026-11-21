@@ -48714,17 +48714,10 @@ This repository uses **pr-flow** for automated Issue-to-PR delivery.
 - **Setup:** \`${opts.setupCommand || "(none)"}\`
 - **Verify:** \`${opts.verifyCommand}\`
 
-## For Interactive Agents (IDE / Chat)
-Read and follow [\`.agents/skills/pr-flow/SKILL.md\`](./.agents/skills/pr-flow/SKILL.md) whenever planning features, managing issues, or reviewing PRs:
-- **Plan & Decompose:** Author \`plan-manifest.yml\`, validate with \`pr-flow plan validate\`, and materialize with \`pr-flow plan materialize\`.
-- **Lifecycle Status:** Issues are tracked via the \`pr-flow-status\` organization Issue Field (\`backlog\`, \`blocked-dep\`, \`ready\`, \`in-progress\`, \`review-pending\`, \`fixed\`, \`needs-human\`).
-- **Triage & Review:** Diagnose \`needs-human\` issues and review \`ai/issue-<N>\` PRs via \`gh pr review\`.
-- **Never** run \`git push\`, \`gh pr create\`, or open manual branches for AI-managed tasks.
+## Repository Conventions
+- Add repository-specific architecture notes, lint rules, or testing constraints here.
 
-## For CI Execution Agents
-- Keep changes minimal, well-tested, and scoped strictly to the assigned GitHub issue.
-- Always run \`${opts.verifyCommand}\` before writing \`result.json\`.
-- Never run \`git push\`, \`gh\`, or create branches/PRs manually; the \`pr-flow\` control plane handles Git and GitHub mutations.
+> Interactive IDE/chat agents: follow [\`.agents/skills/pr-flow/SKILL.md\`](./.agents/skills/pr-flow/SKILL.md) for planning, triage, and PR review.
 `;
   const implementWorkflow = `name: pr-flow Implement
 
@@ -48886,22 +48879,30 @@ jobs:
   reconcile:
     uses: ${usesPrefix}/reusable-reconcile.yml@${opts.prFlowRef}
 `;
+  const reviewTriggerInstruction = (() => {
+    if (opts.reviewMode === "comment") {
+      return `   - Request fixes (triggers \`pr-flow-review.yml\` via \`reviewMode: comment\`): \`gh pr comment <PR_NUMBER> --body "..."\` (or submit a review comment via \`gh pr review <PR_NUMBER> --comment --body "..."\`)`;
+    }
+    if (opts.reviewMode === "both") {
+      return `   - Request fixes (triggers \`pr-flow-review.yml\` via \`reviewMode: both\`): \`gh pr review <PR_NUMBER> --request-changes --body "..."\` (or \`gh pr comment <PR_NUMBER> --body "..."\`)`;
+    }
+    return `   - Request changes (triggers \`pr-flow-review.yml\`): \`gh pr review <PR_NUMBER> --request-changes --body "..."\``;
+  })();
   const skillMdContent = `---
 name: pr-flow
 description: Plan, materialize, and develop features using pr-flow's Agile Issue-to-PR state machine, YAML DAG manifests, and automated CI workflows.
 ---
 # \`pr-flow\` Agent Skill
 
-Use this skill to develop features in any repository governed by \`pr-flow\`.
+Use this skill to plan features, triage issues, and review PRs in any repository governed by \`pr-flow\`.
 
-## Core Architecture & Safety Rules
+## Core Rules
 
-1. **Deterministic Control Plane vs. AI Execution Plane**:
-   - The TypeScript + XState v5 control plane owns all \`pr-flow-status\` Issue Field transitions, dependency checks, WIP limits, branching, and PR creation.
-   - The AI coding agent runs in an isolated CI container with **no GitHub write tokens**. It only modifies local code and outputs a structured \`result.json\`.
+1. **Control Plane vs. Execution Plane**:
+   - The deterministic TypeScript + XState v5 control plane owns all \`pr-flow-status\` transitions, dependency guards, WIP limits, branching, and PR creation.
+   - CI agents run with zero GitHub write tokens and export \`changes.patch\` + \`result.json\`.
 2. **Cardinal Rule for Interactive Agents**:
-   - **Never run \`git push\`, \`gh pr create\`, or make manual branches** for AI-managed tasks.
-   - All code generation is requested via issues, executed in CI, and delivered via \`ai/issue-<N>\` PRs opened by \`pr-flow[bot]\`.
+   - **Never run \`git push\`, \`gh pr create\`, or open manual branches** for AI-managed tasks.
    - Your role in the IDE/chat is **Agile Planner, Spec Author, and Review Partner**.
 
 ---
@@ -48909,11 +48910,11 @@ Use this skill to develop features in any repository governed by \`pr-flow\`.
 ## Feature Planning & Spec Decomposition
 
 ### 1. Author \`plan-manifest.yml\`
-- \`type:epic\`: Top-level strategic container (never executed directly; status rolls up from children).
-- \`type:story\`: Container if it has sub-issues; executable leaf if it has **0** sub-issues.
-- \`type:task\` / \`type:bug\`: Executable leaf (**1 issue = 1 PR = 1 commit** on \`main\`).
-- Use \`blockedBy: [id1, id2]\` to form a Directed Acyclic Graph (DAG) with no cycles or dangling IDs.
-- \`pr-flow plan materialize\` automatically appends **Development Standards** (declarative programming style, TypeScript type-driven development, functional programming style) to every created issue description.
+- \`type:epic\`: Optional top-level container (never executed directly; status rolls up from children).
+- \`type:story\`: Container if it has sub-issues; executable leaf if it has **0** sub-issues. Stories without \`parentId\` auto-link to \`epic\` when present.
+- \`type:task\` / \`type:bug\`: Executable leaf (**1 issue = 1 PR = 1 commit** on \`${opts.baseBranch}\`).
+- Optional fields per issue: \`blockedBy: [id1, ...]\` (must form a DAG) and \`labels: [...]\`.
+- \`plan materialize\` appends \`## Development Standards\` unless already present in \`body\`.
 
 \`\`\`yaml
 version: 1
@@ -48945,21 +48946,14 @@ GITHUB_TOKEN=$(gh auth token) npx --yes github:${opts.prFlowOwner}/pr-flow#${opt
 
 ---
 
-## Lifecycle, WIP Limits & Rollup
+## Lifecycle & Execution
 
-Issues use the \`pr-flow-status\` organization Single-Select Issue Field with values:
+Issues use the \`pr-flow-status\` organization Single-Select Issue Field:
 \`backlog\`, \`blocked-dep\`, \`ready\`, \`in-progress\`, \`review-pending\`, \`fixed\`, \`needs-human\`.
 
-- **Triggering execution:** Setting \`pr-flow-status\` to \`ready\` on an unblocked leaf task triggers \`pr-flow-implement.yml\` (or run \`gh workflow run pr-flow-implement.yml -f issue_number=<NUMBER>\`).
-- **WIP limit:** Only \`in-progress\` issues count toward \`wipLimit\` (default: ${String(opts.wipLimit)}). \`review-pending\` is **uncapped** so code review never blocks new work.
-- **Parent rollup precedence:** Container status rolls up automatically from children in strict order:
-  1. Any child \`needs-human\` \u2192 \`needs-human\`
-  2. All children \`fixed\` \u2192 \`fixed\` (and closes parent)
-  3. Any child \`in-progress\`, \`review-pending\`, or \`fixed\` \u2192 \`in-progress\`
-  4. Any child \`ready\` \u2192 \`ready\`
-  5. Any child \`blocked-dep\` \u2192 \`blocked-dep\`
-  6. Otherwise \u2192 \`backlog\`
-- **Manual reconciliation:** Run \`GITHUB_TOKEN=$(gh auth token) npx --yes github:${opts.prFlowOwner}/pr-flow#${opts.prFlowRef} reconcile --repo <owner>/<repo>\` to unblock downstream issues, compute rollups, and dispatch ready work immediately.
+- **Trigger execution:** Setting \`pr-flow-status\` to \`ready\` on an unblocked leaf triggers \`pr-flow-implement.yml\` (or dispatch manually: \`gh workflow run pr-flow-implement.yml -f issue_number=<NUMBER>\`).
+- **WIP limit:** Only executable leaf \`in-progress\` issues count toward \`wipLimit\` (configured: ${String(opts.wipLimit)}). \`review-pending\` is **uncapped**.
+- **Manual reconciliation:** Run \`GITHUB_TOKEN=$(gh auth token) npx --yes github:${opts.prFlowOwner}/pr-flow#${opts.prFlowRef} reconcile --repo <owner>/<repo>\` to unblock downstream tasks, recompute container rollups, and dispatch ready work immediately.
 
 ---
 
@@ -48970,14 +48964,16 @@ Issues use the \`pr-flow-status\` organization Single-Select Issue Field with va
      - \`gh issue view <NUMBER> --comments\`
      - \`gh run list --workflow=pr-flow-implement.yml\`
      - \`gh run view <RUN_ID> --log-failed\`
-   - Clarify acceptance criteria on the issue, then set \`pr-flow-status\` back to \`ready\`:
-     \`\`\`bash
-     GITHUB_TOKEN=$(gh auth token) npx --yes github:${opts.prFlowOwner}/pr-flow#${opts.prFlowRef} status set --issue <NUMBER> --status ready --repo <owner>/<repo>
-     \`\`\`
+   - Check if CI opened a **\`[WIP]\` draft PR** on \`ai/issue-<NUMBER>\` with partial changes (\`gh pr list --head ai/issue-<NUMBER>\`).
+     - If you want a fresh run from \`${opts.baseBranch}\`, **close the \`[WIP]\` draft PR first** (\`claim\` blocks pickup with \`PR_ALREADY_EXISTS\` while any PR for \`ai/issue-<NUMBER>\` is open), clarify the issue body, and re-queue:
+       \`\`\`bash
+       GITHUB_TOKEN=$(gh auth token) npx --yes github:${opts.prFlowOwner}/pr-flow#${opts.prFlowRef} status set --issue <NUMBER> --status ready --repo <owner>/<repo>
+       \`\`\`
 2. **Review \`ai/issue-<N>\` PRs**:
    - Inspect diff: \`gh pr diff <PR_NUMBER>\`
-   - Request changes (triggers \`pr-flow-review.yml\`): \`gh pr review <PR_NUMBER> --request-changes --body "..."\`
-   - Approve & auto-merge: \`gh pr review <PR_NUMBER> --approve --body "LGTM!"\`
+${reviewTriggerInstruction}
+     - On review follow-up, \`pr-flow\` commits fixes to \`ai/issue-<N>\`, replies to and resolves addressed inline threads, and re-requests reviewers.
+   - Approve & merge: \`gh pr review <PR_NUMBER> --approve --body "LGTM!"\` (auto-merges if \`triggers.autoMergeOnApprove: true\` in \`pr-flow.config.yml\`).
 `;
   result = writeIfAllowed(path2.join(opts.targetDir, "pr-flow.config.yml"), configContent, opts.force, result);
   result = writeIfAllowed(path2.join(opts.targetDir, "AGENTS.md"), agentsMdContent, opts.force, result);

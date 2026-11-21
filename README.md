@@ -7,9 +7,9 @@
 ## Core Principles
 
 1. **Control Plane vs. Execution Plane Separation:** Deterministic TypeScript owns all issue status transitions, dependency guards, WIP limits, and PR creation. The AI coding agent has **zero `issues: write` permission** and only writes code + a structured `result.json`.
-2. **Project-Agnostic:** `pr-flow` makes zero assumptions about your language, package manager, test runner, or AI CLI. Configure those declaratively in `pr-flow.config.yml` and `AGENTS.md`.
+2. **Project-Agnostic:** `pr-flow` adapts to any language, package manager, test runner, or AI CLI via `pr-flow.config.yml` and `AGENTS.md` (note: `plan materialize` appends default TypeScript/FP standards unless an issue body already includes `## Development Standards`).
 3. **Declarative & Type-Safe:** Domain states, events, guard failures, and side effects are modeled as Algebraic Data Types, processed via XState v5, composed with `fp-ts` (`Either` / `TaskEither`), and exhaustively matched with `ts-pattern`.
-4. **Human Sovereignty:** Humans can freely edit labels, priorities, and dependencies at any time. Deterministic safety guards run right before automated AI pickup.
+4. **Human Sovereignty:** Humans can freely edit fields, priorities, and dependencies at any time. Deterministic safety guards run right before automated AI pickup.
 
 ## Quick Start
 
@@ -24,16 +24,17 @@
      --create-custom-field \
      --repo <owner>/<repo>
    ```
-2. Add `GEMINI_API_KEY` to your repository's GitHub Actions secrets.
-3. Set the `pr-flow-status` Issue Field on an executable leaf issue (`type:task`, `type:bug`, or leaf `type:story`) to `ready` to trigger automated implementation.
+2. Add `GEMINI_API_KEY` to repository Actions secrets (`gh secret set GEMINI_API_KEY --repo <owner>/<repo>`), and enable **"Allow GitHub Actions to create and approve pull requests"** (`gh api -X PUT repos/<owner>/<repo>/actions/permissions/workflow -F can_approve_pull_request_reviews=true`).
+3. Verify prerequisites with `pr-flow doctor --repo <owner>/<repo>`, commit and push, then set the `pr-flow-status` Issue Field on an executable leaf issue (`type:task`, `type:bug`, or leaf `type:story`) to `ready`.
 
 ## Documentation
 
-- [Methodology](./docs/METHODOLOGY.md) — Agile hierarchy, leaf execution, WIP limits, and lazy branching
+- [Setup Guide](./docs/SETUP_GUIDE.md) — Prerequisites, AI-driven wizard, and manual CLI bootstrap
+- [Configuration & CLI](./docs/CONFIGURATION.md) — `pr-flow.config.yml` schema and CLI commands
+- [Methodology](./docs/METHODOLOGY.md) — Agile hierarchy, WIP limits, split-job execution, and review loop
 - [State Machine](./docs/STATE_MACHINE.md) — XState v5 lifecycle, guards, and effect interpreter
 - [Design to Issues](./docs/DESIGN_TO_ISSUES.md) — Converting design docs into `plan-manifest.yml` and GitHub sub-issue DAGs
-- [Setup Guide](./docs/SETUP_GUIDE.md) — Manual and AI-driven bootstrapping instructions
-- [AI Setup Skill](./skills/setup-pr-flow/SKILL.md) — Executable playbook for AI coding assistants
+- [AI Setup Skill](./skills/setup-pr-flow/SKILL.md) — Executable wizard playbook for AI coding assistants
 
 ## Development
 

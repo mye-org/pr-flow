@@ -95,9 +95,13 @@ describe('generateInitFiles', () => {
       expect(readFile('.github/workflows/pr-flow-implement.yml')).toContain('field_added');
       expect(readFile('.github/workflows/pr-flow-sync.yml')).toContain('field_added');
       expect(readFile('.github/workflows/pr-flow-sync.yml')).toContain('field_removed');
+      const generatedAgents = readFile('AGENTS.md');
+      expect(generatedAgents).toContain('.agents/skills/pr-flow/SKILL.md');
+      expect(generatedAgents).not.toContain('For CI Execution Agents');
       const generatedSkill = readFile('.agents/skills/pr-flow/SKILL.md');
-      expect(generatedSkill).toContain('Parent rollup precedence');
+      expect(generatedSkill).toContain('[WIP]` draft PR');
       expect(generatedSkill).toContain('status set --issue');
+      expect(generatedSkill).toContain('--request-changes');
 
       const second = generateInitFiles({
         targetDir: tmpDir,
@@ -128,6 +132,7 @@ describe('generateInitFiles', () => {
       expect(reviewYml).toContain('issue_comment:');
       expect(reviewYml).toContain("review.state == 'commented'");
       expect(reviewYml).toContain("review.state == 'changes_requested'");
+      expect(readFile('.agents/skills/pr-flow/SKILL.md')).toContain('reviewMode: both');
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

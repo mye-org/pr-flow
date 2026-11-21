@@ -29,7 +29,14 @@ issues:
       - task-jwt
 ```
 
-## 2. Validate & Materialize
+## 2. Manifest Rules
+
+- `epic` is optional; when present, top-level `issues` without `parentId` are automatically linked as sub-issues of `epic`.
+- Each issue supports optional `body`, `parentId`, `blockedBy` (must form a DAG), and `labels: [...]`.
+- `materialize` automatically appends `## Development Standards` to every issue body unless `## Development Standards` is already present in `body`.
+- Leaf issues with `blockedBy` entries are initialized with `pr-flow-status` = `blocked-dep`; unblocked leaf issues start at `ready`; container issues (`epic` or `story` with children) start at `backlog`.
+
+## 3. Validate & Materialize
 
 ```bash
 # Validate schema and ensure the dependency graph is a DAG (no cycles or dangling IDs)
@@ -38,5 +45,3 @@ pr-flow plan validate --file plan-manifest.yml
 # Create issues in topological order, link sub_issues, and attach blocked_by dependencies
 GITHUB_TOKEN=$(gh auth token) pr-flow plan materialize --file plan-manifest.yml --repo <owner>/<repo>
 ```
-
-Issues with `blockedBy` entries are initialized with `pr-flow-status` = `blocked-dep`; unblocked leaf issues are initialized with `pr-flow-status` = `ready`.

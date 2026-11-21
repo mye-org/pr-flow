@@ -16,9 +16,12 @@ import {
   AI_MANAGED_LABEL,
   branchNameForIssue,
   DEFAULT_LABELS,
+  FIELD_VALUE_TO_STATUS,
   isContainerIssue,
   isExecutableLeaf,
+  STATUS_TO_FIELD_VALUE,
   type IssueNode,
+  type IssueStatus,
 } from '../domain/issue.js';
 import { parsePlanManifest } from '../domain/plan.js';
 import { executeEffects } from '../interpreter/executeEffects.js';
@@ -109,8 +112,8 @@ program
   .option('--review-mode <mode>', 'Review trigger mode (changes_requested|comment|both)', 'changes_requested')
   .option('--force', 'Overwrite existing files', false)
   .option('--sync-labels', 'Also sync GitHub labels via GITHUB_TOKEN', false)
-  .option('--sync-fields', 'Also create/verify the pr-flow-status organization Issue Field via GITHUB_TOKEN', false)
-  .option('--repo <owner/repo>', 'Target GitHub repository for --sync-labels / --sync-fields')
+  .option('--create-custom-field', 'Also create/verify the pr-flow-status organization Issue Field via GITHUB_TOKEN', false)
+  .option('--repo <owner/repo>', 'Target GitHub repository for --sync-labels / --create-custom-field')
   .action(async (opts) => {
     const result = generateInitFiles({
       targetDir: path.resolve(opts.dir),
@@ -134,7 +137,7 @@ program
       console.log(`Synced ${DEFAULT_LABELS.length} pr-flow labels to GitHub.`);
     }
 
-    if (opts.syncFields) {
+    if (opts.createCustomField) {
       const github = createGitHubFromEnv(opts.repo);
       await runOrExit(github.ensureStatusField());
       console.log('Synced pr-flow-status organization Issue Field.');
@@ -164,6 +167,53 @@ fieldsCmd
     const github = createGitHubFromEnv(opts.repo, opts.fieldName);
     await runOrExit(github.ensureStatusField());
     console.log(`Synced "${opts.fieldName}" Issue Field.`);
+  });
+
+const statusCmd = program.command('status').description('Manage pr-flow-status Issue Field values on issues');
+
+statusCmd
+  .command('set')
+  .description('Set the pr-flow-status Issue Field on a GitHub issue')
+  .requiredOption('--issue <number>', 'Issue number')
+  .requiredOption(
+    '--status <value>',
+    'Target status (backlog|blocked-dep|ready|in-progress|review-pending|fixed|needs-human)',
+  )
+  .option('--field-name <name>', 'Issue Field name', 'pr-flow-status')
+  .option('--repo <owner/repo>', 'GitHub repository (defaults to GITHUB_REPOSITORY)')
+  .action(async (opts) => {
+    const rawStatus = String(opts.status).trim();
+    const resolvedStatus: IssueStatus | undefined =
+      FIELD_VALUE_TO_STATUS[rawStatus] ??
+      (Object.prototype.hasOwnProperty.call(STATUS_TO_FIELD_VALUE, rawStatus)
+        ? (rawStatus as IssueStatus)
+        : undefined);
+
+    if (!resolvedStatus) {
+      fail({
+        type: 'CONFIG_ERROR',
+        message: `Invalid status "${rawStatus}". Expected one of: ${Object.values(STATUS_TO_FIELD_VALUE).join(', ')}.`,
+      });
+    }
+
+    const issueNumber = Number(opts.issue);
+    if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+      fail({
+        type: 'CONFIG_ERROR',
+        message: `Invalid issue number "${opts.issue}".`,
+      });
+    }
+
+    const github = createGitHubFromEnv(opts.repo, opts.fieldName);
+    await runOrExit(github.setIssueStatus(issueNumber, resolvedStatus));
+    console.log(
+      JSON.stringify({
+        updated: true,
+        issue: issueNumber,
+        field: opts.fieldName,
+        status: STATUS_TO_FIELD_VALUE[resolvedStatus],
+      }),
+    );
   });
 
 const planCmd = program.command('plan').description('Validate and materialize plan manifests');

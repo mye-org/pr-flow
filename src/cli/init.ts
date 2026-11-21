@@ -226,10 +226,10 @@ Use this skill to develop features in any repository governed by \`pr-flow\`.
 ## Feature Planning & Spec Decomposition
 
 ### 1. Author \`plan-manifest.yml\`
-- \`type:epic\`: Top-level container (rollup only).
-- \`type:story\`: Container or leaf.
-- \`type:task\` / \`type:bug\`: Executable leaf (1 issue = 1 PR).
-- Use \`blockedBy: [id1, id2]\` to form a DAG.
+- \`type:epic\`: Top-level strategic container (never executed directly; status rolls up from children).
+- \`type:story\`: Container if it has sub-issues; executable leaf if it has **0** sub-issues.
+- \`type:task\` / \`type:bug\`: Executable leaf (**1 issue = 1 PR = 1 commit** on \`main\`).
+- Use \`blockedBy: [id1, id2]\` to form a Directed Acyclic Graph (DAG) with no cycles or dangling IDs.
 
 \`\`\`yaml
 version: 1
@@ -261,25 +261,38 @@ GITHUB_TOKEN=$(gh auth token) npx --yes github:${opts.prFlowOwner}/pr-flow#${opt
 
 ---
 
-## Lifecycle & \`pr-flow-status\` Issue Field
+## Lifecycle, WIP Limits & Rollup
 
 Issues use the \`pr-flow-status\` organization Single-Select Issue Field with values:
 \`backlog\`, \`blocked-dep\`, \`ready\`, \`in-progress\`, \`review-pending\`, \`fixed\`, \`needs-human\`.
 
-- Setting \`pr-flow-status\` to \`ready\` on an unblocked leaf task triggers \`pr-flow-implement.yml\`.
-- Only \`in-progress\` issues count toward \`wipLimit\` (default: ${opts.wipLimit}).
+- **Triggering execution:** Setting \`pr-flow-status\` to \`ready\` on an unblocked leaf task triggers \`pr-flow-implement.yml\` (or run \`gh workflow run pr-flow-implement.yml -f issue_number=<NUMBER>\`).
+- **WIP limit:** Only \`in-progress\` issues count toward \`wipLimit\` (default: ${opts.wipLimit}). \`review-pending\` is **uncapped** so code review never blocks new work.
+- **Parent rollup precedence:** Container status rolls up automatically from children in strict order:
+  1. Any child \`needs-human\` → \`needs-human\`
+  2. All children \`fixed\` → \`fixed\` (and closes parent)
+  3. Any child \`in-progress\`, \`review-pending\`, or \`fixed\` → \`in-progress\`
+  4. Any child \`ready\` → \`ready\`
+  5. Any child \`blocked-dep\` → \`blocked-dep\`
+  6. Otherwise → \`backlog\`
+- **Manual reconciliation:** Run \`GITHUB_TOKEN=$(gh auth token) npx --yes github:${opts.prFlowOwner}/pr-flow#${opts.prFlowRef} reconcile --repo <owner>/<repo>\` to unblock downstream issues, compute rollups, and dispatch ready work immediately.
 
 ---
 
 ## Triaging \`needs-human\` & Reviewing PRs
 
-1. **Diagnose \`needs-human\`**:
-   - \`gh issue view <NUMBER> --comments\`
-   - \`gh run list --workflow=pr-flow-implement.yml\`
-   - Update acceptance criteria and set \`pr-flow-status\` back to \`ready\` (or dispatch \`gh workflow run pr-flow-implement.yml -f issue_number=<NUMBER>\`).
+1. **Diagnose & re-queue \`needs-human\`**:
+   - Inspect comments and failed workflow logs:
+     - \`gh issue view <NUMBER> --comments\`
+     - \`gh run list --workflow=pr-flow-implement.yml\`
+     - \`gh run view <RUN_ID> --log-failed\`
+   - Clarify acceptance criteria on the issue, then set \`pr-flow-status\` back to \`ready\`:
+     \`\`\`bash
+     GITHUB_TOKEN=$(gh auth token) npx --yes github:${opts.prFlowOwner}/pr-flow#${opts.prFlowRef} status set --issue <NUMBER> --status ready --repo <owner>/<repo>
+     \`\`\`
 2. **Review \`ai/issue-<N>\` PRs**:
-   - \`gh pr diff <PR_NUMBER>\`
-   - Request changes: \`gh pr review <PR_NUMBER> --request-changes --body "..."\`
+   - Inspect diff: \`gh pr diff <PR_NUMBER>\`
+   - Request changes (triggers \`pr-flow-review.yml\`): \`gh pr review <PR_NUMBER> --request-changes --body "..."\`
    - Approve & auto-merge: \`gh pr review <PR_NUMBER> --approve --body "LGTM!"\`
 `;
 

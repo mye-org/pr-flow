@@ -13,13 +13,15 @@
 
 ## Quick Start
 
+> **Prerequisite:** Your target repository must be in a **GitHub Organization** (Issue Fields are an org-level feature, and `--create-custom-field` requires org-admin permissions).
+
 1. In your target repository, run:
    ```bash
-   npx github:mingqianye/pr-flow#v1 init \
+   GITHUB_TOKEN=$(gh auth token) npx github:mingqianye/pr-flow#v1 init \
      --setup-command "npm ci" \
      --verify-command "npm test" \
      --sync-labels \
-     --sync-fields \
+     --create-custom-field \
      --repo <owner>/<repo>
    ```
 2. Add `GEMINI_API_KEY` to your repository's GitHub Actions secrets.

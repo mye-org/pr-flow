@@ -59,6 +59,12 @@ describe('generateInitFiles', () => {
       expect(
         fs.readFileSync(path.join(tmpDir, '.github/workflows/pr-flow-implement.yml'), 'utf-8'),
       ).toContain('field_added');
+      const generatedSkill = fs.readFileSync(
+        path.join(tmpDir, '.agents/skills/pr-flow/SKILL.md'),
+        'utf-8',
+      );
+      expect(generatedSkill).toContain('Parent rollup precedence');
+      expect(generatedSkill).toContain('status set --issue');
 
       const second = generateInitFiles({
         targetDir: tmpDir,

@@ -11078,7 +11078,6 @@ ${params.agentsMd}
 - **Number:** #${params.issue.number}
 - **Title:** ${params.issue.title}
 - **Type:** ${params.issue.type}
-- **Priority:** ${params.issue.priority}
 
 ### Description
 ${params.issue.body || "(No description provided)"}
@@ -15169,18 +15168,28 @@ var NEVER = INVALID;
 
 // src/domain/issue.ts
 var AI_MANAGED_LABEL = "ai-managed";
-var STATUS_TO_LABEL = {
-  backlog: "status:backlog",
-  blocked_dep: "status:blocked-dep",
-  ready: "status:ready",
-  in_progress: "status:in-progress",
-  review_pending: "status:review-pending",
-  fixed: "status:fixed",
-  needs_human: "status:needs-human"
+var PR_FLOW_STATUS_FIELD_NAME = "pr-flow-status";
+var STATUS_TO_FIELD_VALUE = {
+  backlog: "backlog",
+  blocked_dep: "blocked-dep",
+  ready: "ready",
+  in_progress: "in-progress",
+  review_pending: "review-pending",
+  fixed: "fixed",
+  needs_human: "needs-human"
 };
-var LABEL_TO_STATUS = Object.fromEntries(
-  Object.entries(STATUS_TO_LABEL).map(([status, label]) => [label, status])
+var FIELD_VALUE_TO_STATUS = Object.fromEntries(
+  Object.entries(STATUS_TO_FIELD_VALUE).map(([status, value]) => [value, status])
 );
+var PR_FLOW_STATUS_OPTIONS = [
+  { name: "backlog", color: "GRAY", description: "Unrefined or not yet scheduled" },
+  { name: "blocked-dep", color: "ORANGE", description: "Blocked by open upstream dependencies" },
+  { name: "ready", color: "GREEN", description: "Ready for automated AI pickup" },
+  { name: "in-progress", color: "YELLOW", description: "Claimed and actively executing (counts toward WIP limit)" },
+  { name: "review-pending", color: "BLUE", description: "PR opened and awaiting human review (uncapped WIP)" },
+  { name: "fixed", color: "PURPLE", description: "PR merged and issue resolved" },
+  { name: "needs-human", color: "RED", description: "Requires human intervention or clarification" }
+];
 var TYPE_TO_LABEL = {
   epic: "type:epic",
   story: "type:story",
@@ -15190,31 +15199,11 @@ var TYPE_TO_LABEL = {
 var LABEL_TO_TYPE = Object.fromEntries(
   Object.entries(TYPE_TO_LABEL).map(([type, label]) => [label, type])
 );
-var PRIORITY_TO_LABEL = {
-  p0: "priority:p0",
-  p1: "priority:p1",
-  p2: "priority:p2",
-  p3: "priority:p3"
-};
-var LABEL_TO_PRIORITY = Object.fromEntries(
-  Object.entries(PRIORITY_TO_LABEL).map(([priority, label]) => [label, priority])
-);
 var DEFAULT_LABELS = [
-  { name: "status:backlog", color: "ededed", description: "Unrefined or not yet scheduled" },
-  { name: "status:blocked-dep", color: "d93f0b", description: "Blocked by open upstream dependencies" },
-  { name: "status:ready", color: "0e8a16", description: "Ready for automated AI pickup" },
-  { name: "status:in-progress", color: "fbca04", description: "Claimed and actively executing (counts toward WIP limit)" },
-  { name: "status:review-pending", color: "1d76db", description: "PR opened and awaiting human review (uncapped WIP)" },
-  { name: "status:fixed", color: "6f42c1", description: "PR merged and issue resolved" },
-  { name: "status:needs-human", color: "b60205", description: "Requires human intervention or clarification" },
   { name: "type:epic", color: "3e4b9e", description: "Top-level Agile Epic container (status rolls up)" },
   { name: "type:story", color: "5319e7", description: "User Story (container if it has sub-issues, leaf otherwise)" },
   { name: "type:task", color: "006b75", description: "Executable engineering task (1 PR per issue)" },
   { name: "type:bug", color: "d73a4a", description: "Executable bug fix (1 PR per issue)" },
-  { name: "priority:p0", color: "b60205", description: "Critical priority" },
-  { name: "priority:p1", color: "d93f0b", description: "High priority" },
-  { name: "priority:p2", color: "fbca04", description: "Medium priority" },
-  { name: "priority:p3", color: "c2e0c6", description: "Low priority" },
   { name: AI_MANAGED_LABEL, color: "0052cc", description: "Managed by pr-flow automation" }
 ];
 function isExecutableLeaf(issue) {
@@ -15232,12 +15221,9 @@ function isContainerIssue(issue) {
 function branchNameForIssue(issueNumber) {
   return `ai/issue-${issueNumber}`;
 }
-function extractStatusFromLabels(labels) {
-  for (const label of labels) {
-    const status = LABEL_TO_STATUS[label];
-    if (status) return status;
-  }
-  return "backlog";
+function extractStatusFromFieldValue(value) {
+  if (!value) return "backlog";
+  return FIELD_VALUE_TO_STATUS[value] ?? "backlog";
 }
 function extractTypeFromLabels(labels) {
   for (const label of labels) {
@@ -15245,13 +15231,6 @@ function extractTypeFromLabels(labels) {
     if (issueType) return issueType;
   }
   return "task";
-}
-function extractPriorityFromLabels(labels) {
-  for (const label of labels) {
-    const priority = LABEL_TO_PRIORITY[label];
-    if (priority) return priority;
-  }
-  return "p2";
 }
 var AgentResultSchema = external_exports.object({
   status: external_exports.enum(["success", "needs_human", "failed", "retryable"]),
@@ -18998,16 +18977,24 @@ function toGitHubError(context, err) {
     cause: err
   };
 }
-function mapRawIssue(raw, subIssueNumbers = [], blockedByNumbers = [], blockingNumbers = []) {
+function extractStatusFieldValueFromGraphQL(nodes, fieldName) {
+  if (!nodes) return null;
+  for (const node of nodes) {
+    if (node.field?.name === fieldName && typeof node.name === "string") {
+      return node.name;
+    }
+  }
+  return null;
+}
+function mapRawIssue(raw, subIssueNumbers = [], blockedByNumbers = [], blockingNumbers = [], statusValue = null) {
   const labels = raw.labels.map((l) => typeof l === "string" ? l : l.name ?? "").filter((l) => l.length > 0);
   return {
     number: raw.number,
     title: raw.title,
     body: raw.body ?? "",
     state: raw.state === "closed" ? "closed" : "open",
-    status: extractStatusFromLabels(labels),
+    status: extractStatusFromFieldValue(statusValue),
     type: extractTypeFromLabels(labels),
-    priority: extractPriorityFromLabels(labels),
     labels,
     subIssueNumbers,
     blockedByNumbers,
@@ -19021,10 +19008,121 @@ var OctokitGitHubAdapter = class {
   octokit;
   owner;
   repo;
+  statusFieldName;
+  cachedStatusFieldId = null;
   constructor(options) {
     this.octokit = new Octokit2({ auth: options.token });
     this.owner = options.owner;
     this.repo = options.repo;
+    this.statusFieldName = options.statusFieldName ?? PR_FLOW_STATUS_FIELD_NAME;
+  }
+  async resolveStatusFieldId() {
+    if (this.cachedStatusFieldId !== null) {
+      return this.cachedStatusFieldId;
+    }
+    const res = await this.octokit.request("GET /orgs/{org}/issue-fields", {
+      org: this.owner
+    });
+    const fields = res.data;
+    const match3 = fields.find((f) => f.name === this.statusFieldName);
+    if (!match3) {
+      throw new Error(
+        `Issue field "${this.statusFieldName}" not found in organization "${this.owner}". Run "pr-flow fields sync --repo ${this.owner}/${this.repo}" with an org-admin token or create it in Organization Settings -> Issue Fields.`
+      );
+    }
+    this.cachedStatusFieldId = match3.id;
+    return match3.id;
+  }
+  getIssueStatusFieldValue(issueNumber) {
+    return tryCatch(
+      async () => {
+        const query = `
+          query GetIssueFieldValues($owner: String!, $repo: String!, $number: Int!) {
+            repository(owner: $owner, name: $repo) {
+              issue(number: $number) {
+                issueFieldValues(first: 20) {
+                  nodes {
+                    __typename
+                    ... on IssueFieldSingleSelectValue {
+                      name
+                      field {
+                        ... on IssueFieldSingleSelect {
+                          name
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        `;
+        const data = await this.octokit.graphql(query, {
+          owner: this.owner,
+          repo: this.repo,
+          number: issueNumber,
+          headers: { "GraphQL-Features": "issue_fields" }
+        });
+        return extractStatusFieldValueFromGraphQL(
+          data.repository.issue?.issueFieldValues.nodes,
+          this.statusFieldName
+        );
+      },
+      (err) => toGitHubError(`Failed to fetch issue field values for #${issueNumber}`, err)
+    );
+  }
+  setIssueStatus(issueNumber, status) {
+    return tryCatch(
+      async () => {
+        const fieldId = await this.resolveStatusFieldId();
+        await this.octokit.request(
+          "POST /repos/{owner}/{repo}/issues/{issue_number}/issue-field-values",
+          {
+            owner: this.owner,
+            repo: this.repo,
+            issue_number: issueNumber,
+            issue_field_values: [
+              {
+                field_id: fieldId,
+                value: STATUS_TO_FIELD_VALUE[status]
+              }
+            ]
+          }
+        );
+      },
+      (err) => toGitHubError(`Failed to set "${this.statusFieldName}" on #${issueNumber} to "${status}"`, err)
+    );
+  }
+  ensureStatusField() {
+    return tryCatch(
+      async () => {
+        const res = await this.octokit.request("GET /orgs/{org}/issue-fields", {
+          org: this.owner
+        });
+        const fields = res.data;
+        const existing = fields.find((f) => f.name === this.statusFieldName);
+        if (existing) {
+          this.cachedStatusFieldId = existing.id;
+          return;
+        }
+        const created = await this.octokit.request("POST /orgs/{org}/issue-fields", {
+          org: this.owner,
+          name: this.statusFieldName,
+          data_type: "single_select",
+          description: "pr-flow automated Issue-to-PR lifecycle status",
+          options: PR_FLOW_STATUS_OPTIONS.map((opt) => ({
+            name: opt.name,
+            color: opt.color,
+            description: opt.description
+          }))
+        });
+        const createdData = created.data;
+        if (typeof createdData.id === "number") {
+          this.cachedStatusFieldId = createdData.id;
+        }
+      },
+      (err) => toGitHubError(`Failed to ensure "${this.statusFieldName}" issue field in org "${this.owner}"`, err)
+    );
   }
   getIssue(issueNumber) {
     return pipe(
@@ -19042,12 +19140,14 @@ var OctokitGitHubAdapter = class {
           apS2("subIssues", this.listSubIssues(issueNumber)),
           apS2("blockedBy", this.listBlockedBy(issueNumber)),
           apS2("blocking", this.listBlocking(issueNumber)),
+          apS2("statusValue", this.getIssueStatusFieldValue(issueNumber)),
           map5(
-            ({ subIssues, blockedBy, blocking }) => mapRawIssue(
+            ({ subIssues, blockedBy, blocking, statusValue }) => mapRawIssue(
               res.data,
               subIssues,
               blockedBy.map((b2) => b2.number),
-              blocking
+              blocking,
+              statusValue
             )
           )
         )
@@ -19057,13 +19157,82 @@ var OctokitGitHubAdapter = class {
   listAllIssues(state = "all") {
     return tryCatch(
       async () => {
-        const rawIssues = await this.octokit.paginate(this.octokit.rest.issues.listForRepo, {
-          owner: this.owner,
-          repo: this.repo,
-          state,
-          per_page: 100
-        });
-        return rawIssues.filter((item) => !("pull_request" in item && item.pull_request)).map((item) => mapRawIssue(item));
+        const states = state === "open" ? ["OPEN"] : state === "closed" ? ["CLOSED"] : ["OPEN", "CLOSED"];
+        const query = `
+          query ListIssuesWithFields($owner: String!, $repo: String!, $states: [IssueState!], $after: String) {
+            repository(owner: $owner, name: $repo) {
+              issues(first: 100, states: $states, after: $after) {
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
+                nodes {
+                  number
+                  title
+                  body
+                  state
+                  updatedAt
+                  labels(first: 30) {
+                    nodes {
+                      name
+                    }
+                  }
+                  issueFieldValues(first: 20) {
+                    nodes {
+                      __typename
+                      ... on IssueFieldSingleSelectValue {
+                        name
+                        field {
+                          ... on IssueFieldSingleSelect {
+                            name
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        `;
+        const results = [];
+        let after = null;
+        while (true) {
+          const data = await this.octokit.graphql(query, {
+            owner: this.owner,
+            repo: this.repo,
+            states,
+            after,
+            headers: { "GraphQL-Features": "issue_fields" }
+          });
+          for (const node of data.repository.issues.nodes) {
+            const labels = node.labels.nodes.map((l) => l.name);
+            const statusValue = extractStatusFieldValueFromGraphQL(
+              node.issueFieldValues?.nodes,
+              this.statusFieldName
+            );
+            results.push({
+              number: node.number,
+              title: node.title,
+              body: node.body ?? "",
+              state: node.state === "CLOSED" ? "closed" : "open",
+              status: extractStatusFromFieldValue(statusValue),
+              type: extractTypeFromLabels(labels),
+              labels,
+              subIssueNumbers: [],
+              blockedByNumbers: [],
+              blockingNumbers: [],
+              linkedPrNumber: null,
+              parentNumber: null,
+              updatedAt: node.updatedAt
+            });
+          }
+          if (!data.repository.issues.pageInfo.hasNextPage) {
+            break;
+          }
+          after = data.repository.issues.pageInfo.endCursor;
+        }
+        return results;
       },
       (err) => toGitHubError("Failed to list repository issues", err)
     );
@@ -19490,6 +19659,7 @@ var PrFlowConfigSchema = external_exports.object({
   version: external_exports.literal(1),
   wipLimit: external_exports.number().int().min(1).default(4),
   baseBranch: external_exports.string().min(1).default("main"),
+  statusFieldName: external_exports.string().min(1).default("pr-flow-status"),
   workspace: external_exports.object({
     setupCommand: external_exports.string().default(""),
     verifyCommand: external_exports.string().min(1)
@@ -19553,14 +19723,12 @@ function formatGuardError(err) {
 
 // src/domain/plan.ts
 var import_yaml2 = __toESM(require_dist(), 1);
-var PlanPrioritySchema = external_exports.enum(["p0", "p1", "p2", "p3"]);
 var PlanIssueTypeSchema = external_exports.enum(["epic", "story", "task", "bug"]);
 var PlanIssueNodeSchema = external_exports.object({
   id: external_exports.string().min(1),
   title: external_exports.string().min(1),
   body: external_exports.string().default(""),
   type: PlanIssueTypeSchema,
-  priority: PlanPrioritySchema.default("p2"),
   parentId: external_exports.string().min(1).optional(),
   blockedBy: external_exports.array(external_exports.string().min(1)).default([]),
   labels: external_exports.array(external_exports.string().min(1)).default([])
@@ -19570,8 +19738,7 @@ var PlanManifestSchema = external_exports.object({
   epic: external_exports.object({
     id: external_exports.string().min(1),
     title: external_exports.string().min(1),
-    body: external_exports.string().default(""),
-    priority: PlanPrioritySchema.default("p1")
+    body: external_exports.string().default("")
   }).optional(),
   issues: external_exports.array(PlanIssueNodeSchema).min(1)
 });
@@ -19779,13 +19946,7 @@ function F(t2) {
 
 // src/interpreter/executeEffects.ts
 function executeEffect(effect, github) {
-  return M(effect).with({ type: "SWAP_STATUS_LABEL" }, (e2) => {
-    const removeOld = e2.from ? github.removeLabel(e2.issueNumber, STATUS_TO_LABEL[e2.from]) : right4(void 0);
-    return pipe(
-      removeOld,
-      chain2(() => github.addLabels(e2.issueNumber, [STATUS_TO_LABEL[e2.to]]))
-    );
-  }).with({ type: "ADD_COMMENT" }, (e2) => github.addComment(e2.issueNumber, e2.body)).with({ type: "CLOSE_ISSUE" }, (e2) => github.closeIssue(e2.issueNumber)).with({ type: "REOPEN_ISSUE" }, (e2) => github.reopenIssue(e2.issueNumber)).with(
+  return M(effect).with({ type: "SET_STATUS_FIELD" }, (e2) => github.setIssueStatus(e2.issueNumber, e2.to)).with({ type: "ADD_COMMENT" }, (e2) => github.addComment(e2.issueNumber, e2.body)).with({ type: "CLOSE_ISSUE" }, (e2) => github.closeIssue(e2.issueNumber)).with({ type: "REOPEN_ISSUE" }, (e2) => github.reopenIssue(e2.issueNumber)).with(
     { type: "CREATE_PR" },
     (e2) => pipe(
       github.createPullRequest({
@@ -23086,9 +23247,9 @@ var issueMachine = setup({
     }
   },
   actions: {
-    emitLabelSwap: assign(({ context }, params) => ({
+    emitStatusFieldSet: assign(({ context }, params) => ({
       effects: appendEffect(context.effects, {
-        type: "SWAP_STATUS_LABEL",
+        type: "SET_STATUS_FIELD",
         issueNumber: context.issueNumber,
         from: params.from,
         to: params.to
@@ -23126,11 +23287,11 @@ var issueMachine = setup({
       on: {
         DEPS_BLOCKED: {
           target: "blocked_dep",
-          actions: { type: "emitLabelSwap", params: { from: "backlog", to: "blocked_dep" } }
+          actions: { type: "emitStatusFieldSet", params: { from: "backlog", to: "blocked_dep" } }
         },
         DEPS_RESOLVED: {
           target: "ready",
-          actions: { type: "emitLabelSwap", params: { from: "backlog", to: "ready" } }
+          actions: { type: "emitStatusFieldSet", params: { from: "backlog", to: "ready" } }
         }
       }
     },
@@ -23139,10 +23300,10 @@ var issueMachine = setup({
         DEPS_RESOLVED: {
           target: "ready",
           actions: [
-            { type: "emitLabelSwap", params: { from: "blocked_dep", to: "ready" } },
+            { type: "emitStatusFieldSet", params: { from: "blocked_dep", to: "ready" } },
             {
               type: "emitComment",
-              params: { body: "All upstream dependencies are closed. Issue is now `status:ready`." }
+              params: { body: "All upstream dependencies are closed. Issue `pr-flow-status` is now `ready`." }
             }
           ]
         }
@@ -23153,13 +23314,13 @@ var issueMachine = setup({
         DEPS_BLOCKED: {
           target: "blocked_dep",
           actions: [
-            { type: "emitLabelSwap", params: { from: "ready", to: "blocked_dep" } }
+            { type: "emitStatusFieldSet", params: { from: "ready", to: "blocked_dep" } }
           ]
         },
         PICKUP_REQUESTED: {
           guard: "canPickup",
           target: "in_progress",
-          actions: { type: "emitLabelSwap", params: { from: "ready", to: "in_progress" } }
+          actions: { type: "emitStatusFieldSet", params: { from: "ready", to: "in_progress" } }
         }
       }
     },
@@ -23168,7 +23329,7 @@ var issueMachine = setup({
         EXECUTION_SUCCEEDED: {
           target: "review_pending",
           actions: [
-            { type: "emitLabelSwap", params: { from: "in_progress", to: "review_pending" } },
+            { type: "emitStatusFieldSet", params: { from: "in_progress", to: "review_pending" } },
             assign(({ context, event }) => ({
               effects: appendEffect(context.effects, {
                 type: "ADD_COMMENT",
@@ -23183,7 +23344,7 @@ var issueMachine = setup({
         EXECUTION_FAILED: {
           target: "needs_human",
           actions: [
-            { type: "emitLabelSwap", params: { from: "in_progress", to: "needs_human" } },
+            { type: "emitStatusFieldSet", params: { from: "in_progress", to: "needs_human" } },
             assign(({ context, event }) => ({
               effects: appendEffect(context.effects, {
                 type: "ADD_COMMENT",
@@ -23200,13 +23361,13 @@ var issueMachine = setup({
             guard: "canRetry",
             target: "ready",
             actions: [
-              { type: "emitLabelSwap", params: { from: "in_progress", to: "ready" } },
+              { type: "emitStatusFieldSet", params: { from: "in_progress", to: "ready" } },
               assign(({ context, event }) => ({
                 effects: appendEffect(context.effects, {
                   type: "ADD_COMMENT",
                   issueNumber: context.issueNumber,
                   body: `<!-- pr-flow:retries=${event.retryCount + 1} -->
-Transient agent API error (attempt ${event.retryCount + 1}/${event.maxRetries}); re-queued to \`status:ready\` for automatic retry.
+Transient agent API error (attempt ${event.retryCount + 1}/${event.maxRetries}); re-queued \`pr-flow-status\` to \`ready\` for automatic retry.
 
 **Reason:** ${event.reason}`
                 })
@@ -23216,7 +23377,7 @@ Transient agent API error (attempt ${event.retryCount + 1}/${event.maxRetries});
           {
             target: "needs_human",
             actions: [
-              { type: "emitLabelSwap", params: { from: "in_progress", to: "needs_human" } },
+              { type: "emitStatusFieldSet", params: { from: "in_progress", to: "needs_human" } },
               assign(({ context, event }) => ({
                 effects: appendEffect(context.effects, {
                   type: "ADD_COMMENT",
@@ -23232,7 +23393,7 @@ Transient agent API error (attempt ${event.retryCount + 1}/${event.maxRetries});
         NEEDS_HUMAN_DETECTED: {
           target: "needs_human",
           actions: [
-            { type: "emitLabelSwap", params: { from: "in_progress", to: "needs_human" } },
+            { type: "emitStatusFieldSet", params: { from: "in_progress", to: "needs_human" } },
             assign(({ context, event }) => ({
               effects: appendEffect(context.effects, {
                 type: "ADD_COMMENT",
@@ -23250,12 +23411,12 @@ Transient agent API error (attempt ${event.retryCount + 1}/${event.maxRetries});
       on: {
         REVIEW_CHANGES_REQUESTED: {
           target: "in_progress",
-          actions: { type: "emitLabelSwap", params: { from: "review_pending", to: "in_progress" } }
+          actions: { type: "emitStatusFieldSet", params: { from: "review_pending", to: "in_progress" } }
         },
         PR_MERGED: {
           target: "fixed",
           actions: [
-            { type: "emitLabelSwap", params: { from: "review_pending", to: "fixed" } },
+            { type: "emitStatusFieldSet", params: { from: "review_pending", to: "fixed" } },
             { type: "emitCloseIssue" }
           ]
         },
@@ -23268,7 +23429,7 @@ Transient agent API error (attempt ${event.retryCount + 1}/${event.maxRetries});
                 type: "ADD_COMMENT",
                 issueNumber: context.issueNumber,
                 body: `<!-- pr-flow:retries=${event.retryCount + 1} -->
-Transient agent API error during review follow-up (attempt ${event.retryCount + 1}/${event.maxRetries}); keeping in \`status:review-pending\`.
+Transient agent API error during review follow-up (attempt ${event.retryCount + 1}/${event.maxRetries}); keeping \`pr-flow-status\` in \`review-pending\`.
 
 **Reason:** ${event.reason}`
               })
@@ -23277,7 +23438,7 @@ Transient agent API error during review follow-up (attempt ${event.retryCount + 
           {
             target: "needs_human",
             actions: [
-              { type: "emitLabelSwap", params: { from: "review_pending", to: "needs_human" } },
+              { type: "emitStatusFieldSet", params: { from: "review_pending", to: "needs_human" } },
               assign(({ context, event }) => ({
                 effects: appendEffect(context.effects, {
                   type: "ADD_COMMENT",
@@ -23293,7 +23454,7 @@ Transient agent API error during review follow-up (attempt ${event.retryCount + 
         EXECUTION_FAILED: {
           target: "needs_human",
           actions: [
-            { type: "emitLabelSwap", params: { from: "review_pending", to: "needs_human" } },
+            { type: "emitStatusFieldSet", params: { from: "review_pending", to: "needs_human" } },
             assign(({ context, event }) => ({
               effects: appendEffect(context.effects, {
                 type: "ADD_COMMENT",
@@ -23311,11 +23472,11 @@ Transient agent API error during review follow-up (attempt ${event.retryCount + 
       on: {
         HUMAN_REQUEUED: {
           target: "ready",
-          actions: { type: "emitLabelSwap", params: { from: "needs_human", to: "ready" } }
+          actions: { type: "emitStatusFieldSet", params: { from: "needs_human", to: "ready" } }
         },
         DEPS_BLOCKED: {
           target: "blocked_dep",
-          actions: { type: "emitLabelSwap", params: { from: "needs_human", to: "blocked_dep" } }
+          actions: { type: "emitStatusFieldSet", params: { from: "needs_human", to: "blocked_dep" } }
         }
       }
     },
@@ -23325,7 +23486,7 @@ Transient agent API error during review follow-up (attempt ${event.retryCount + 
           target: "ready",
           actions: [
             { type: "emitReopenIssue" },
-            { type: "emitLabelSwap", params: { from: "fixed", to: "ready" } }
+            { type: "emitStatusFieldSet", params: { from: "fixed", to: "ready" } }
           ]
         }
       }
@@ -23489,13 +23650,12 @@ function materializePlan(manifest, github) {
           body: validManifest.epic.body,
           labels: [
             TYPE_TO_LABEL.epic,
-            PRIORITY_TO_LABEL[validManifest.epic.priority],
-            STATUS_TO_LABEL.backlog,
             AI_MANAGED_LABEL
           ]
         }),
-        map5((created) => {
+        chain2((created) => {
           idToNumber.set(validManifest.epic.id, created.number);
+          return github.setIssueStatus(created.number, "backlog");
         })
       ) : right4(void 0);
       return pipe(
@@ -23509,8 +23669,6 @@ function materializePlan(manifest, github) {
                 const labels = Array.from(
                   /* @__PURE__ */ new Set([
                     TYPE_TO_LABEL[node.type],
-                    PRIORITY_TO_LABEL[node.priority],
-                    STATUS_TO_LABEL[initialStatus],
                     AI_MANAGED_LABEL,
                     ...node.labels
                   ])
@@ -23521,8 +23679,9 @@ function materializePlan(manifest, github) {
                     body: node.body,
                     labels
                   }),
-                  map5((created) => {
+                  chain2((created) => {
                     idToNumber.set(node.id, created.number);
+                    return github.setIssueStatus(created.number, initialStatus);
                   })
                 );
               })
@@ -23594,7 +23753,7 @@ function computeRollupEffects(parent, children) {
   const effects = [];
   if (targetStatus !== parent.status) {
     effects.push({
-      type: "SWAP_STATUS_LABEL",
+      type: "SET_STATUS_FIELD",
       issueNumber: parent.number,
       from: parent.status,
       to: targetStatus
@@ -23649,6 +23808,7 @@ triggers:
   autoPickup: true
   autoMergeOnApprove: true
   mergeMethod: squash
+statusFieldName: pr-flow-status
 `;
   const agentsMdContent = `# AGENTS.md
 
@@ -23658,7 +23818,14 @@ This repository uses **pr-flow** for automated Issue-to-PR delivery.
 - **Setup:** \`${opts.setupCommand || "(none)"}\`
 - **Verify:** \`${opts.verifyCommand}\`
 
-## Conventions
+## For Interactive Agents (IDE / Chat)
+Read and follow [\`.agents/skills/pr-flow/SKILL.md\`](./.agents/skills/pr-flow/SKILL.md) whenever planning features, managing issues, or reviewing PRs:
+- **Plan & Decompose:** Author \`plan-manifest.yml\`, validate with \`pr-flow plan validate\`, and materialize with \`pr-flow plan materialize\`.
+- **Lifecycle Status:** Issues are tracked via the \`pr-flow-status\` organization Issue Field (\`backlog\`, \`blocked-dep\`, \`ready\`, \`in-progress\`, \`review-pending\`, \`fixed\`, \`needs-human\`).
+- **Triage & Review:** Diagnose \`needs-human\` issues and review \`ai/issue-<N>\` PRs via \`gh pr review\`.
+- **Never** run \`git push\`, \`gh pr create\`, or open manual branches for AI-managed tasks.
+
+## For CI Execution Agents
 - Keep changes minimal, well-tested, and scoped strictly to the assigned GitHub issue.
 - Always run \`${opts.verifyCommand}\` before writing \`result.json\`.
 - Never run \`git push\`, \`gh\`, or create branches/PRs manually; the \`pr-flow\` control plane handles Git and GitHub mutations.
@@ -23667,7 +23834,7 @@ This repository uses **pr-flow** for automated Issue-to-PR delivery.
 
 on:
   issues:
-    types: [labeled, reopened]
+    types: [field_added, reopened]
   workflow_dispatch:
     inputs:
       issue_number:
@@ -23688,7 +23855,8 @@ jobs:
   implement:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      github.event.label.name == 'status:ready'
+      github.event.action == 'reopened' ||
+      github.event.action == 'field_added'
     uses: ${usesPrefix}/reusable-implement.yml@${opts.prFlowRef}
     with:
       issue_number: \${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.issue_number) || github.event.issue.number }}
@@ -23783,8 +23951,106 @@ jobs:
   reconcile:
     uses: ${usesPrefix}/reusable-reconcile.yml@${opts.prFlowRef}
 `;
+  const skillMdContent = `---
+name: pr-flow
+description: Plan, materialize, and develop features using pr-flow's Agile Issue-to-PR state machine, YAML DAG manifests, and automated CI workflows.
+---
+# \`pr-flow\` Agent Skill
+
+Use this skill to develop features in any repository governed by \`pr-flow\`.
+
+## Core Architecture & Safety Rules
+
+1. **Deterministic Control Plane vs. AI Execution Plane**:
+   - The TypeScript + XState v5 control plane owns all \`pr-flow-status\` Issue Field transitions, dependency checks, WIP limits, branching, and PR creation.
+   - The AI coding agent runs in an isolated CI container with **no GitHub write tokens**. It only modifies local code and outputs a structured \`result.json\`.
+2. **Cardinal Rule for Interactive Agents**:
+   - **Never run \`git push\`, \`gh pr create\`, or make manual branches** for AI-managed tasks.
+   - All code generation is requested via issues, executed in CI, and delivered via \`ai/issue-<N>\` PRs opened by \`pr-flow[bot]\`.
+   - Your role in the IDE/chat is **Agile Planner, Spec Author, and Review Partner**.
+
+---
+
+## Feature Planning & Spec Decomposition
+
+### 1. Author \`plan-manifest.yml\`
+- \`type:epic\`: Top-level strategic container (never executed directly; status rolls up from children).
+- \`type:story\`: Container if it has sub-issues; executable leaf if it has **0** sub-issues.
+- \`type:task\` / \`type:bug\`: Executable leaf (**1 issue = 1 PR = 1 commit** on \`main\`).
+- Use \`blockedBy: [id1, id2]\` to form a Directed Acyclic Graph (DAG) with no cycles or dangling IDs.
+
+\`\`\`yaml
+version: 1
+epic:
+  id: epic-feature
+  title: "Epic: Feature Name"
+  body: "Overall goal and architecture."
+
+issues:
+  - id: story-foundation
+    title: "Story: Core Domain Foundation"
+    body: "Container story."
+    type: story
+
+  - id: task-domain-types
+    title: "Implement domain types"
+    body: |
+      ## Acceptance Criteria
+      - Define interfaces and unit tests.
+    type: task
+    parentId: story-foundation
+\`\`\`
+
+### 2. Validate & Materialize
+\`\`\`bash
+npx --yes github:${opts.prFlowOwner}/pr-flow#${opts.prFlowRef} plan validate --file plan-manifest.yml
+GITHUB_TOKEN=$(gh auth token) npx --yes github:${opts.prFlowOwner}/pr-flow#${opts.prFlowRef} plan materialize --file plan-manifest.yml --repo <owner>/<repo>
+\`\`\`
+
+---
+
+## Lifecycle, WIP Limits & Rollup
+
+Issues use the \`pr-flow-status\` organization Single-Select Issue Field with values:
+\`backlog\`, \`blocked-dep\`, \`ready\`, \`in-progress\`, \`review-pending\`, \`fixed\`, \`needs-human\`.
+
+- **Triggering execution:** Setting \`pr-flow-status\` to \`ready\` on an unblocked leaf task triggers \`pr-flow-implement.yml\` (or run \`gh workflow run pr-flow-implement.yml -f issue_number=<NUMBER>\`).
+- **WIP limit:** Only \`in-progress\` issues count toward \`wipLimit\` (default: ${opts.wipLimit}). \`review-pending\` is **uncapped** so code review never blocks new work.
+- **Parent rollup precedence:** Container status rolls up automatically from children in strict order:
+  1. Any child \`needs-human\` \u2192 \`needs-human\`
+  2. All children \`fixed\` \u2192 \`fixed\` (and closes parent)
+  3. Any child \`in-progress\`, \`review-pending\`, or \`fixed\` \u2192 \`in-progress\`
+  4. Any child \`ready\` \u2192 \`ready\`
+  5. Any child \`blocked-dep\` \u2192 \`blocked-dep\`
+  6. Otherwise \u2192 \`backlog\`
+- **Manual reconciliation:** Run \`GITHUB_TOKEN=$(gh auth token) npx --yes github:${opts.prFlowOwner}/pr-flow#${opts.prFlowRef} reconcile --repo <owner>/<repo>\` to unblock downstream issues, compute rollups, and dispatch ready work immediately.
+
+---
+
+## Triaging \`needs-human\` & Reviewing PRs
+
+1. **Diagnose & re-queue \`needs-human\`**:
+   - Inspect comments and failed workflow logs:
+     - \`gh issue view <NUMBER> --comments\`
+     - \`gh run list --workflow=pr-flow-implement.yml\`
+     - \`gh run view <RUN_ID> --log-failed\`
+   - Clarify acceptance criteria on the issue, then set \`pr-flow-status\` back to \`ready\`:
+     \`\`\`bash
+     GITHUB_TOKEN=$(gh auth token) npx --yes github:${opts.prFlowOwner}/pr-flow#${opts.prFlowRef} status set --issue <NUMBER> --status ready --repo <owner>/<repo>
+     \`\`\`
+2. **Review \`ai/issue-<N>\` PRs**:
+   - Inspect diff: \`gh pr diff <PR_NUMBER>\`
+   - Request changes (triggers \`pr-flow-review.yml\`): \`gh pr review <PR_NUMBER> --request-changes --body "..."\`
+   - Approve & auto-merge: \`gh pr review <PR_NUMBER> --approve --body "LGTM!"\`
+`;
   writeIfAllowed(path2.join(opts.targetDir, "pr-flow.config.yml"), configContent, opts.force, result);
   writeIfAllowed(path2.join(opts.targetDir, "AGENTS.md"), agentsMdContent, opts.force, result);
+  writeIfAllowed(
+    path2.join(opts.targetDir, ".agents/skills/pr-flow/SKILL.md"),
+    skillMdContent,
+    opts.force,
+    result
+  );
   writeIfAllowed(
     path2.join(opts.targetDir, ".github/workflows/pr-flow-implement.yml"),
     implementWorkflow,
@@ -23846,7 +24112,7 @@ function loadConfigFromDisk(configPath = "pr-flow.config.yml") {
   }
   return parsed.right;
 }
-function createGitHubFromEnv(repoFlag) {
+function createGitHubFromEnv(repoFlag, statusFieldName) {
   const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
   if (!token) {
     fail({ type: "CONFIG_ERROR", message: "GITHUB_TOKEN (or GH_TOKEN) environment variable is required." });
@@ -23856,7 +24122,7 @@ function createGitHubFromEnv(repoFlag) {
     fail({ type: "CONFIG_ERROR", message: "Repository must be specified via --repo owner/name or GITHUB_REPOSITORY." });
   }
   const [owner, repo] = repoSlug.split("/", 2);
-  return new OctokitGitHubAdapter({ token, owner, repo });
+  return new OctokitGitHubAdapter({ token, owner, repo, statusFieldName });
 }
 async function runOrExit(task) {
   const res = await task();
@@ -23870,7 +24136,7 @@ function runGit(cmd, cwd) {
 }
 var program2 = new Command();
 program2.name("pr-flow").description("Project-agnostic Agile Issue-to-PR workflow engine").version("1.0.0");
-program2.command("init").description("Bootstrap pr-flow config, AGENTS.md, and workflows in a target repository").option("--dir <path>", "Target repository directory", ".").option("--owner <owner>", "GitHub owner of the pr-flow repository", "mingqianye").option("--ref <ref>", "Git ref/tag of pr-flow workflows", "v1").option("--base-branch <branch>", "Default base branch", "main").option("--wip-limit <n>", "Max concurrent in-progress issues", "4").option("--setup-command <cmd>", "Workspace setup command", "npm ci").option("--verify-command <cmd>", "Workspace verification command", "npm test").option("--review-mode <mode>", "Review trigger mode (changes_requested|comment|both)", "changes_requested").option("--force", "Overwrite existing files", false).option("--sync-labels", "Also sync GitHub labels via GITHUB_TOKEN", false).option("--repo <owner/repo>", "Target GitHub repository for --sync-labels").action(async (opts) => {
+program2.command("init").description("Bootstrap pr-flow config, AGENTS.md, workflows, and agent skills in a target repository").option("--dir <path>", "Target repository directory", ".").option("--owner <owner>", "GitHub owner of the pr-flow repository", "mingqianye").option("--ref <ref>", "Git ref/tag of pr-flow workflows", "v1").option("--base-branch <branch>", "Default base branch", "main").option("--wip-limit <n>", "Max concurrent in-progress issues", "4").option("--setup-command <cmd>", "Workspace setup command", "npm ci").option("--verify-command <cmd>", "Workspace verification command", "npm test").option("--review-mode <mode>", "Review trigger mode (changes_requested|comment|both)", "changes_requested").option("--force", "Overwrite existing files", false).option("--sync-labels", "Also sync GitHub labels via GITHUB_TOKEN", false).option("--create-custom-field", "Also create/verify the pr-flow-status organization Issue Field via GITHUB_TOKEN", false).option("--repo <owner/repo>", "Target GitHub repository for --sync-labels / --create-custom-field").action(async (opts) => {
   const result = generateInitFiles({
     targetDir: path3.resolve(opts.dir),
     prFlowOwner: opts.owner,
@@ -23890,12 +24156,54 @@ program2.command("init").description("Bootstrap pr-flow config, AGENTS.md, and w
     await runOrExit(github.ensureLabels(DEFAULT_LABELS));
     console.log(`Synced ${DEFAULT_LABELS.length} pr-flow labels to GitHub.`);
   }
+  if (opts.createCustomField) {
+    const github = createGitHubFromEnv(opts.repo);
+    await runOrExit(github.ensureStatusField());
+    console.log("Synced pr-flow-status organization Issue Field.");
+  }
 });
 var labelsCmd = program2.command("labels").description("Manage pr-flow GitHub labels");
 labelsCmd.command("sync").description("Idempotently create or update all pr-flow labels in the target GitHub repository").option("--repo <owner/repo>", "GitHub repository (defaults to GITHUB_REPOSITORY)").action(async (opts) => {
   const github = createGitHubFromEnv(opts.repo);
   await runOrExit(github.ensureLabels(DEFAULT_LABELS));
   console.log(`Synced ${DEFAULT_LABELS.length} labels.`);
+});
+var fieldsCmd = program2.command("fields").description("Manage pr-flow GitHub organization Issue Fields");
+fieldsCmd.command("sync").description("Idempotently create the pr-flow-status Single-Select Issue Field in the target GitHub organization").option("--field-name <name>", "Issue Field name", "pr-flow-status").option("--repo <owner/repo>", "GitHub repository (defaults to GITHUB_REPOSITORY)").action(async (opts) => {
+  const github = createGitHubFromEnv(opts.repo, opts.fieldName);
+  await runOrExit(github.ensureStatusField());
+  console.log(`Synced "${opts.fieldName}" Issue Field.`);
+});
+var statusCmd = program2.command("status").description("Manage pr-flow-status Issue Field values on issues");
+statusCmd.command("set").description("Set the pr-flow-status Issue Field on a GitHub issue").requiredOption("--issue <number>", "Issue number").requiredOption(
+  "--status <value>",
+  "Target status (backlog|blocked-dep|ready|in-progress|review-pending|fixed|needs-human)"
+).option("--field-name <name>", "Issue Field name", "pr-flow-status").option("--repo <owner/repo>", "GitHub repository (defaults to GITHUB_REPOSITORY)").action(async (opts) => {
+  const rawStatus = String(opts.status).trim();
+  const resolvedStatus = FIELD_VALUE_TO_STATUS[rawStatus] ?? (Object.prototype.hasOwnProperty.call(STATUS_TO_FIELD_VALUE, rawStatus) ? rawStatus : void 0);
+  if (!resolvedStatus) {
+    fail({
+      type: "CONFIG_ERROR",
+      message: `Invalid status "${rawStatus}". Expected one of: ${Object.values(STATUS_TO_FIELD_VALUE).join(", ")}.`
+    });
+  }
+  const issueNumber = Number(opts.issue);
+  if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+    fail({
+      type: "CONFIG_ERROR",
+      message: `Invalid issue number "${opts.issue}".`
+    });
+  }
+  const github = createGitHubFromEnv(opts.repo, opts.fieldName);
+  await runOrExit(github.setIssueStatus(issueNumber, resolvedStatus));
+  console.log(
+    JSON.stringify({
+      updated: true,
+      issue: issueNumber,
+      field: opts.fieldName,
+      status: STATUS_TO_FIELD_VALUE[resolvedStatus]
+    })
+  );
 });
 var planCmd = program2.command("plan").description("Validate and materialize plan manifests");
 planCmd.command("validate").description("Validate a plan-manifest.yml schema and dependency DAG").requiredOption("--file <path>", "Path to plan-manifest.yml").action((opts) => {
@@ -23912,7 +24220,7 @@ planCmd.command("materialize").description("Create GitHub issues, sub-issue link
   const result = await runOrExit(materializePlan(parsed.right, github));
   console.log(JSON.stringify(result, null, 2));
 });
-program2.command("claim").description("Run deterministic FSM pickup guards and claim an issue into status:in-progress").requiredOption("--issue <number>", "Issue number").option("--config <path>", "Path to pr-flow.config.yml", "pr-flow.config.yml").option("--repo <owner/repo>", "GitHub repository").action(async (opts) => {
+program2.command("claim").description("Run deterministic FSM pickup guards and claim an issue into pr-flow-status: in-progress").requiredOption("--issue <number>", "Issue number").option("--config <path>", "Path to pr-flow.config.yml", "pr-flow.config.yml").option("--repo <owner/repo>", "GitHub repository").action(async (opts) => {
   const issueNumber = Number(opts.issue);
   const config = loadConfigFromDisk(opts.config);
   const github = createGitHubFromEnv(opts.repo);
@@ -24167,7 +24475,7 @@ ${agentResult.summary}
     })
   );
 });
-program2.command("merge").description("Merge an approved ai-managed pull request and transition its linked issue to status:fixed").requiredOption("--pr <number>", "Pull request number").option("--issue <number>", "Linked issue number (optional)", "0").option("--config <path>", "Path to pr-flow.config.yml", "pr-flow.config.yml").option("--repo <owner/repo>", "GitHub repository").action(async (opts) => {
+program2.command("merge").description("Merge an approved ai-managed pull request and transition its linked issue to pr-flow-status: fixed").requiredOption("--pr <number>", "Pull request number").option("--issue <number>", "Linked issue number (optional)", "0").option("--config <path>", "Path to pr-flow.config.yml", "pr-flow.config.yml").option("--repo <owner/repo>", "GitHub repository").action(async (opts) => {
   const prNumber = Number(opts.pr);
   const issueNumber = Number(opts.issue);
   const configPath = path3.resolve(opts.config);

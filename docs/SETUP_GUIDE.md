@@ -1,5 +1,10 @@
 # Setup Guide
 
+## Prerequisites
+
+- Your target repository must belong to a **GitHub Organization** (GitHub Issue Fields such as `pr-flow-status` are an organization-level feature).
+- Creating the `pr-flow-status` field (`--create-custom-field` or `pr-flow fields sync`) requires a `GITHUB_TOKEN` with **organization admin** permissions.
+
 ## Option A: AI-Driven Setup
 
 In your target repository, ask your AI coding assistant:
@@ -12,7 +17,7 @@ The AI assistant will follow [`skills/setup-pr-flow/SKILL.md`](../skills/setup-p
 
 1. Run `pr-flow init`:
    ```bash
-   npx --yes github:mingqianye/pr-flow#v1 init \
+   GITHUB_TOKEN=$(gh auth token) npx --yes github:mingqianye/pr-flow#v1 init \
      --owner mingqianye \
      --ref v1 \
      --base-branch main \
@@ -20,11 +25,13 @@ The AI assistant will follow [`skills/setup-pr-flow/SKILL.md`](../skills/setup-p
      --setup-command "npm ci" \
      --verify-command "npm test" \
      --sync-labels \
+     --create-custom-field \
      --repo <owner>/<repo>
    ```
 2. Review the generated files:
    - `pr-flow.config.yml`
    - `AGENTS.md`
+   - `.agents/skills/pr-flow/SKILL.md`
    - `.github/workflows/pr-flow-implement.yml`
    - `.github/workflows/pr-flow-review.yml`
    - `.github/workflows/pr-flow-sync.yml`

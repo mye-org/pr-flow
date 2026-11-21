@@ -48,6 +48,8 @@ agent:
     - gemini-3.5-flash-lite
   maxRetries: 3
   timeoutMinutes: 20
+  maxSessionTurns: 25
+  compressionThreshold: 0.2
 
 triggers:
   reviewMode: ${opts.reviewMode}

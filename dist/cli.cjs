@@ -11067,13 +11067,40 @@ var apS2 = /* @__PURE__ */ apS(ApplyPar2);
 var chain2 = flatMap4;
 
 // src/adapters/agent/prompts.ts
-function buildImplementPrompt(params) {
-  const agentsSection = params.agentsMd ? `
+function formatAgentsSection(agentsMd) {
+  return agentsMd ? `
 ## Repository Instructions (AGENTS.md)
-${params.agentsMd}
+${agentsMd.trim()}
 ` : "";
-  return `You are an autonomous software engineer implementing GitHub Issue #${params.issue.number}.
-
+}
+function formatRepoFilesSection(repoFiles) {
+  if (!repoFiles || repoFiles.length === 0) return "";
+  return `
+## Repository File Tree
+\`\`\`
+${repoFiles.join("\n")}
+\`\`\`
+`;
+}
+function buildImplementPrompt(params) {
+  const agentsSection = formatAgentsSection(params.agentsMd);
+  const repoFilesSection = formatRepoFilesSection(params.repoFiles);
+  return `You are an autonomous software engineer implementing a GitHub issue.
+${agentsSection}
+## Strict Execution Rules
+1. Implement the requested changes cleanly in the current working tree.
+2. Do NOT run \`git push\`, \`gh\`, or modify git branches. The CI control plane handles branching and PR creation.
+3. Minimize exploratory tool calls: use the provided Repository File Tree to open only the relevant files directly.
+4. While iterating, run targeted tests if needed; run the full verification command once before finishing:
+   \`${params.verifyCommand}\`
+5. Write a structured JSON file to \`${params.resultFilePath}\` (or output it as your final JSON response) matching this exact schema:
+   - On success:
+     \`{"status":"success","summary":"<concise summary of changes>","testsRun":true,"filesChanged":["..."]}\`
+   - If requirements are ambiguous, blocked, or impossible without human input:
+     \`{"status":"needs_human","summary":"<what was attempted>","reason":"<specific question or blocker for human>","testsRun":false}\`
+   - If verification failed and cannot be fixed:
+     \`{"status":"failed","summary":"<what failed>","reason":"<error details>","testsRun":true}\`
+${repoFilesSection}
 ## Issue Details
 - **Number:** #${params.issue.number}
 - **Title:** ${params.issue.title}
@@ -11081,42 +11108,44 @@ ${params.agentsMd}
 
 ### Description
 ${params.issue.body || "(No description provided)"}
-${agentsSection}
-## Strict Execution Rules
-1. Implement the requested changes cleanly in the current working tree.
-2. Do NOT run \`git push\`, \`gh\`, or modify git branches. The CI control plane handles branching and PR creation.
-3. Run the verification command before finishing:
-   \`${params.verifyCommand}\`
-4. Write a structured JSON file to \`${params.resultFilePath}\` matching this exact schema:
-   - On success:
-     \`{"status":"success","summary":"<concise summary of changes>","testsRun":true,"filesChanged":["..."]}\`
-   - If requirements are ambiguous, blocked, or impossible without human input:
-     \`{"status":"needs_human","summary":"<what was attempted>","reason":"<specific question or blocker for human>","testsRun":false}\`
-   - If verification failed and cannot be fixed:
-     \`{"status":"failed","summary":"<what failed>","reason":"<error details>","testsRun":true}\`
 `;
 }
 function buildReviewPrompt(params) {
-  const agentsSection = params.agentsMd ? `
-## Repository Instructions (AGENTS.md)
-${params.agentsMd}
+  const agentsSection = formatAgentsSection(params.agentsMd);
+  const commentsBlock = params.reviewComments.length > 0 ? params.reviewComments.join("\n\n") : "(No unresolved review comments found; inspect recent PR feedback.)";
+  const changedFilesSection = params.changedFiles && params.changedFiles.length > 0 ? `
+## Changed Files on PR #${params.prNumber}
+\`\`\`
+${params.changedFiles.join("\n")}
+\`\`\`
 ` : "";
-  const commentsBlock = params.reviewComments.length > 0 ? params.reviewComments.join("\n\n") : "(No review comments found; inspect recent PR feedback.)";
-  return `You are addressing code review feedback on PR #${params.prNumber} for Issue #${params.issue.number}.
-
-## Issue: #${params.issue.number} \u2014 ${params.issue.title}
+  const diffSection = params.prDiff && params.prDiff.trim().length > 0 ? `
+## Current PR Diff
+\`\`\`diff
+${params.prDiff.trim()}
+\`\`\`
+` : "";
+  const issueBodySection = params.issue.body && params.issue.body.trim().length > 0 ? `
+### Original Issue Description
+${params.issue.body.trim()}
+` : "";
+  return `You are addressing code review feedback on a pull request.
 ${agentsSection}
-## Review Feedback to Address
-${commentsBlock}
-
 ## Strict Execution Rules
 1. Address all requested review changes cleanly in the current working tree.
 2. Do NOT run \`git push\`, \`gh\`, or create new branches/PRs.
-3. Run the verification command before finishing:
+3. Minimize exploratory tool calls: use the provided Changed Files and Current PR Diff directly.
+4. While iterating, run targeted tests if needed; run the full verification command once before finishing:
    \`${params.verifyCommand}\`
-4. Write a structured JSON file to \`${params.resultFilePath}\`:
+5. Write a structured JSON file to \`${params.resultFilePath}\` (or output it as your final JSON response):
    \`{"status":"success","summary":"<summary of review fixes>","testsRun":true,"filesChanged":["..."]}\`
    (or \`"needs_human"\` / \`"failed"\` with \`"reason"\` if blocked).
+
+## Issue: #${params.issue.number} \u2014 ${params.issue.title}
+## PR: #${params.prNumber}
+${issueBodySection}${changedFilesSection}${diffSection}
+## Review Feedback to Address
+${commentsBlock}
 `;
 }
 
@@ -15305,6 +15334,193 @@ function tryReadResult(resultPath) {
     return null;
   }
 }
+function toFiniteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : void 0;
+}
+function parseGeminiJsonOutput(rawOutput) {
+  const trimmed = rawOutput.trim();
+  if (!trimmed) return null;
+  const tryParse = (candidate) => {
+    try {
+      const parsed = JSON.parse(candidate);
+      return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+  let obj = tryParse(trimmed);
+  if (!obj) {
+    const firstBrace = trimmed.indexOf("{");
+    const lastBrace = trimmed.lastIndexOf("}");
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      obj = tryParse(trimmed.slice(firstBrace, lastBrace + 1));
+    }
+  }
+  if (!obj) return null;
+  const response = typeof obj.response === "string" ? obj.response : void 0;
+  const errorObj = typeof obj.error === "object" && obj.error !== null ? obj.error : null;
+  const error = typeof obj.error === "string" ? obj.error : typeof errorObj?.message === "string" ? errorObj.message : void 0;
+  let stats;
+  const rawStats = typeof obj.stats === "object" && obj.stats !== null ? obj.stats : null;
+  if (rawStats) {
+    let inputTokens = 0;
+    let cachedTokens = 0;
+    let outputTokens = 0;
+    let thoughtTokens = 0;
+    let totalTurns = 0;
+    let hasModelStats = false;
+    const models = typeof rawStats.models === "object" && rawStats.models !== null ? rawStats.models : null;
+    if (models) {
+      for (const m of Object.values(models)) {
+        const api = typeof m?.api === "object" && m.api !== null ? m.api : null;
+        const tokens = typeof m?.tokens === "object" && m.tokens !== null ? m.tokens : null;
+        if (api || tokens) hasModelStats = true;
+        totalTurns += toFiniteNumber(api?.totalRequests) ?? 0;
+        inputTokens += toFiniteNumber(tokens?.prompt) ?? toFiniteNumber(tokens?.input) ?? 0;
+        cachedTokens += toFiniteNumber(tokens?.cached) ?? 0;
+        outputTokens += toFiniteNumber(tokens?.candidates) ?? toFiniteNumber(tokens?.output) ?? 0;
+        thoughtTokens += toFiniteNumber(tokens?.thoughts) ?? 0;
+      }
+    }
+    const tools = typeof rawStats.tools === "object" && rawStats.tools !== null ? rawStats.tools : null;
+    const totalCalls = toFiniteNumber(tools?.totalCalls);
+    if (!hasModelStats && totalCalls !== void 0) {
+      totalTurns = totalCalls;
+    }
+    if (hasModelStats || totalCalls !== void 0) {
+      stats = {
+        totalTurns,
+        inputTokens,
+        cachedTokens,
+        outputTokens,
+        thoughtTokens
+      };
+    }
+  }
+  return { response, stats, error };
+}
+function extractAgentResultFromText(text) {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const candidates = [trimmed];
+  const fencedMatches = trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi);
+  for (const m of fencedMatches) {
+    if (m[1]) candidates.unshift(m[1].trim());
+  }
+  const lastOpen = trimmed.lastIndexOf("{");
+  const lastClose = trimmed.lastIndexOf("}");
+  if (lastOpen >= 0 && lastClose > lastOpen) {
+    candidates.push(trimmed.slice(lastOpen, lastClose + 1));
+  }
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      const validated = AgentResultSchema.safeParse(parsed);
+      if (validated.success) return validated.data;
+    } catch {
+    }
+  }
+  return null;
+}
+function buildGeminiSettings(config) {
+  const settings = {
+    model: {
+      maxSessionTurns: config.agent.maxSessionTurns,
+      compressionThreshold: config.agent.compressionThreshold
+    }
+  };
+  if (config.agent.thinkingBudget !== void 0) {
+    settings.modelConfigs = {
+      overrides: [
+        {
+          match: { model: config.agent.model },
+          modelConfig: {
+            generateContentConfig: {
+              thinkingConfig: {
+                thinkingBudget: config.agent.thinkingBudget
+              }
+            }
+          }
+        }
+      ]
+    };
+  }
+  return settings;
+}
+function computeAttemptTimeoutMs(remainingMs, remainingModels) {
+  if (remainingModels <= 1) return Math.max(6e4, remainingMs);
+  const reserveForFallbacks = Math.min(5 * 6e4, Math.floor(remainingMs * 0.25));
+  return Math.max(6e4, remainingMs - reserveForFallbacks);
+}
+function logTokenUsage(modelName, stats) {
+  const parts = [
+    `model=${modelName}`,
+    stats.totalTurns !== void 0 ? `turns=${stats.totalTurns}` : null,
+    stats.inputTokens !== void 0 ? `input=${stats.inputTokens}` : null,
+    stats.cachedTokens !== void 0 ? `cached=${stats.cachedTokens}` : null,
+    stats.outputTokens !== void 0 ? `output=${stats.outputTokens}` : null,
+    stats.thoughtTokens !== void 0 && stats.thoughtTokens > 0 ? `thoughts=${stats.thoughtTokens}` : null
+  ].filter(Boolean);
+  console.error(`[pr-flow] Agent usage: ${parts.join(" ")}`);
+  const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+  if (summaryPath) {
+    try {
+      const line = `- **${modelName}**: turns=${stats.totalTurns ?? "?"}, input=${stats.inputTokens ?? 0}, cached=${stats.cachedTokens ?? 0}, output=${stats.outputTokens ?? 0}, thoughts=${stats.thoughtTokens ?? 0}
+`;
+      fs.appendFileSync(summaryPath, line, "utf-8");
+    } catch {
+    }
+  }
+}
+function withTemporaryGeminiSettings(cwd, config, fn) {
+  if (config.agent.provider !== "gemini") {
+    return fn();
+  }
+  const geminiDir = path.join(cwd, ".gemini");
+  const settingsPath = path.join(geminiDir, "settings.json");
+  const dirExisted = fs.existsSync(geminiDir);
+  const fileExisted = fs.existsSync(settingsPath);
+  const previousContent = fileExisted ? fs.readFileSync(settingsPath, "utf-8") : null;
+  try {
+    fs.mkdirSync(geminiDir, { recursive: true });
+    let merged = {};
+    if (previousContent) {
+      try {
+        const parsed = JSON.parse(previousContent);
+        if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+          merged = parsed;
+        }
+      } catch {
+      }
+    }
+    const generated = buildGeminiSettings(config);
+    const nextSettings = {
+      ...merged,
+      ...generated,
+      model: {
+        ...typeof merged.model === "object" && merged.model !== null ? merged.model : {},
+        ...generated.model
+      }
+    };
+    fs.writeFileSync(settingsPath, JSON.stringify(nextSettings, null, 2), "utf-8");
+    return fn();
+  } finally {
+    try {
+      if (fileExisted && previousContent !== null) {
+        fs.writeFileSync(settingsPath, previousContent, "utf-8");
+      } else if (fs.existsSync(settingsPath)) {
+        fs.unlinkSync(settingsPath);
+      }
+      if (!dirExisted && fs.existsSync(geminiDir)) {
+        const remaining = fs.readdirSync(geminiDir);
+        if (remaining.length === 0) {
+          fs.rmdirSync(geminiDir);
+        }
+      }
+    } catch {
+    }
+  }
+}
 function runAgentExecution(params) {
   const { config, prompt, cwd, outputDir } = params;
   fs.mkdirSync(outputDir, { recursive: true });
@@ -15324,47 +15540,65 @@ function runAgentExecution(params) {
   }
   const nodeOpts = [process.env.NODE_OPTIONS, "--dns-result-order=ipv4first"].filter(Boolean).join(" ");
   const modelsToTry = config.agent.provider === "gemini" ? Array.from(/* @__PURE__ */ new Set([config.agent.model, ...config.agent.fallbackModels])) : ["custom"];
-  const perModelTimeoutMs = Math.max(
-    5 * 6e4,
-    Math.floor(config.agent.timeoutMinutes * 6e4 / modelsToTry.length)
-  );
-  let parsedResult = null;
-  let lastRun = null;
-  for (let idx = 0; idx < modelsToTry.length; idx++) {
-    const modelName = modelsToTry[idx];
-    if (idx > 0) {
-      console.error(`[pr-flow] Falling back to model "${modelName}" after error...`);
-      resetWorkingTree(cwd, outputDir);
-      if (fs.existsSync(resultPath)) fs.unlinkSync(resultPath);
-    }
-    const agentCommand = config.agent.provider === "gemini" ? `npx --yes @google/gemini-cli --model ${modelName} --yolo -p "$(cat ${JSON.stringify(promptPath)})"` : config.agent.command;
-    const agentRun = runShell(
-      agentCommand,
-      cwd,
-      {
-        PR_FLOW_PROMPT_FILE: promptPath,
-        PR_FLOW_RESULT_FILE: resultPath,
-        GEMINI_CLI_TRUST_WORKSPACE: "true",
-        NODE_OPTIONS: nodeOpts
-      },
-      perModelTimeoutMs
-    );
-    lastRun = agentRun;
-    parsedResult = tryReadResult(resultPath);
-    if (agentRun.ok || parsedResult) {
-      break;
-    }
-    if (agentRun.output.length > 0) {
-      console.error(
-        `--- Agent CLI Output (model=${modelName}) ---
+  const deadlineMs = Date.now() + config.agent.timeoutMinutes * 6e4;
+  const { parsedResult, lastRun } = withTemporaryGeminiSettings(cwd, config, () => {
+    let currentResult = null;
+    let currentLastRun = null;
+    for (let idx = 0; idx < modelsToTry.length; idx++) {
+      const modelName = modelsToTry[idx];
+      const remainingMs = deadlineMs - Date.now();
+      if (remainingMs <= 1e4 && idx > 0) {
+        break;
+      }
+      if (idx > 0) {
+        console.error(`[pr-flow] Falling back to model "${modelName}" after error...`);
+        resetWorkingTree(cwd, outputDir);
+        if (fs.existsSync(resultPath)) fs.unlinkSync(resultPath);
+      }
+      const attemptTimeoutMs = computeAttemptTimeoutMs(
+        Math.max(6e4, remainingMs),
+        modelsToTry.length - idx
+      );
+      const agentCommand = config.agent.provider === "gemini" ? `npx --yes @google/gemini-cli --model ${modelName} --yolo --output-format json -p "$(cat ${JSON.stringify(promptPath)})"` : config.agent.command;
+      const agentRun = runShell(
+        agentCommand,
+        cwd,
+        {
+          PR_FLOW_PROMPT_FILE: promptPath,
+          PR_FLOW_RESULT_FILE: resultPath,
+          GEMINI_CLI_TRUST_WORKSPACE: "true",
+          NODE_OPTIONS: nodeOpts
+        },
+        attemptTimeoutMs
+      );
+      currentLastRun = agentRun;
+      const geminiJson = config.agent.provider === "gemini" ? parseGeminiJsonOutput(agentRun.output) : null;
+      if (geminiJson?.stats) {
+        logTokenUsage(modelName, geminiJson.stats);
+      }
+      currentResult = tryReadResult(resultPath);
+      if (!currentResult && geminiJson?.response) {
+        currentResult = extractAgentResultFromText(geminiJson.response);
+        if (currentResult) {
+          fs.writeFileSync(resultPath, JSON.stringify(currentResult, null, 2), "utf-8");
+        }
+      }
+      if (agentRun.ok || currentResult) {
+        break;
+      }
+      if (agentRun.output.length > 0) {
+        console.error(
+          `--- Agent CLI Output (model=${modelName}) ---
 ${agentRun.output}
 --- End Agent CLI Output ---`
-      );
+        );
+      }
+      if (!isModelFallbackError(agentRun.output, agentRun.timedOut)) {
+        break;
+      }
     }
-    if (!isModelFallbackError(agentRun.output, agentRun.timedOut)) {
-      break;
-    }
-  }
+    return { parsedResult: currentResult, lastRun: currentLastRun };
+  });
   if (lastRun && !lastRun.ok && !parsedResult) {
     const retryable = isTransientAgentError(lastRun.output, lastRun.timedOut);
     return left2({
@@ -19694,13 +19928,8 @@ var OctokitGitHubAdapter = class {
   getPrReviewComments(prNumber) {
     return tryCatch(
       async () => {
-        const [reviews, reviewComments, issueComments] = await Promise.all([
+        const [reviews, issueComments] = await Promise.all([
           this.octokit.rest.pulls.listReviews({
-            owner: this.owner,
-            repo: this.repo,
-            pull_number: prNumber
-          }),
-          this.octokit.rest.pulls.listReviewComments({
             owner: this.owner,
             repo: this.repo,
             pull_number: prNumber
@@ -19711,21 +19940,94 @@ var OctokitGitHubAdapter = class {
             issue_number: prNumber
           })
         ]);
+        let lastFixAtMs = 0;
+        for (const ic of issueComments.data) {
+          if (ic.user?.type === "Bot" && (ic.body ?? "").includes("Applied review fixes on `") && ic.created_at) {
+            const ts = Date.parse(ic.created_at);
+            if (!Number.isNaN(ts) && ts > lastFixAtMs) {
+              lastFixAtMs = ts;
+            }
+          }
+        }
         const collected = [];
         for (const r2 of reviews.data) {
-          if (r2.body && r2.body.trim().length > 0) {
-            collected.push(`[Review ${r2.state} by ${r2.user?.login ?? "unknown"}]: ${r2.body}`);
+          if (!r2.body || r2.body.trim().length === 0) continue;
+          if (r2.state === "APPROVED" || r2.state === "DISMISSED") continue;
+          const submittedMs = r2.submitted_at ? Date.parse(r2.submitted_at) : Number.NaN;
+          if (lastFixAtMs > 0 && !Number.isNaN(submittedMs) && submittedMs <= lastFixAtMs) {
+            continue;
           }
+          collected.push(`[Review ${r2.state} by ${r2.user?.login ?? "unknown"}]: ${r2.body}`);
         }
-        for (const rc of reviewComments.data) {
-          collected.push(
-            `[Inline comment on ${rc.path}:${rc.line ?? rc.original_line ?? "?"} by ${rc.user?.login ?? "unknown"}]: ${rc.body}`
+        let usedGraphqlThreads = false;
+        try {
+          const threadData = await this.octokit.graphql(
+            `
+            query GetPrReviewThreads($owner: String!, $repo: String!, $number: Int!) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $number) {
+                  reviewThreads(first: 100) {
+                    nodes {
+                      isResolved
+                      isOutdated
+                      comments(first: 20) {
+                        nodes {
+                          path
+                          line
+                          originalLine
+                          body
+                          author {
+                            login
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            `,
+            { owner: this.owner, repo: this.repo, number: prNumber }
           );
+          const threads = threadData?.repository?.pullRequest?.reviewThreads?.nodes;
+          if (Array.isArray(threads)) {
+            usedGraphqlThreads = true;
+            for (const thread of threads) {
+              if (thread.isResolved) continue;
+              for (const rc of thread.comments.nodes) {
+                const loc = `${rc.path ?? "?"}:${rc.line ?? rc.originalLine ?? "?"}`;
+                const outdatedTag = thread.isOutdated ? " (outdated)" : "";
+                collected.push(
+                  `[Inline comment on ${loc}${outdatedTag} by ${rc.author?.login ?? "unknown"}]: ${rc.body}`
+                );
+              }
+            }
+          }
+        } catch {
+        }
+        if (!usedGraphqlThreads) {
+          const reviewComments = await this.octokit.rest.pulls.listReviewComments({
+            owner: this.owner,
+            repo: this.repo,
+            pull_number: prNumber
+          });
+          for (const rc of reviewComments.data) {
+            const createdMs = rc.created_at ? Date.parse(rc.created_at) : Number.NaN;
+            if (lastFixAtMs > 0 && !Number.isNaN(createdMs) && createdMs <= lastFixAtMs) {
+              continue;
+            }
+            collected.push(
+              `[Inline comment on ${rc.path}:${rc.line ?? rc.original_line ?? "?"} by ${rc.user?.login ?? "unknown"}]: ${rc.body}`
+            );
+          }
         }
         for (const ic of issueComments.data) {
-          if (ic.user?.type !== "Bot") {
-            collected.push(`[PR comment by ${ic.user?.login ?? "unknown"}]: ${ic.body ?? ""}`);
+          if (ic.user?.type === "Bot") continue;
+          const createdMs = ic.created_at ? Date.parse(ic.created_at) : Number.NaN;
+          if (lastFixAtMs > 0 && !Number.isNaN(createdMs) && createdMs <= lastFixAtMs) {
+            continue;
           }
+          collected.push(`[PR comment by ${ic.user?.login ?? "unknown"}]: ${ic.body ?? ""}`);
         }
         return collected;
       },
@@ -19915,7 +20217,10 @@ var PrFlowConfigSchema = external_exports.object({
     fallbackModels: external_exports.array(external_exports.string().min(1)).default([]),
     maxRetries: external_exports.number().int().min(0).default(3),
     command: external_exports.string().optional(),
-    timeoutMinutes: external_exports.number().int().min(1).default(20)
+    timeoutMinutes: external_exports.number().int().min(1).default(20),
+    maxSessionTurns: external_exports.number().int().min(1).default(25),
+    compressionThreshold: external_exports.number().min(0.05).max(0.95).default(0.2),
+    thinkingBudget: external_exports.number().int().min(0).optional()
   }).default({}),
   triggers: external_exports.object({
     reviewMode: external_exports.enum(["changes_requested", "comment", "both"]).default("changes_requested"),
@@ -24062,6 +24367,8 @@ agent:
     - gemini-3.5-flash-lite
   maxRetries: 3
   timeoutMinutes: 20
+  maxSessionTurns: 25
+  compressionThreshold: 0.2
 
 triggers:
   reviewMode: ${opts.reviewMode}
@@ -24596,20 +24903,42 @@ program2.command("execute").description("Run AI coding agent + verifyCommand wit
   let prompt;
   if (prNumber) {
     const reviewComments = await runOrExit(github.getPrReviewComments(prNumber));
+    let changedFiles;
+    let prDiff;
+    try {
+      const diffTarget = `origin/${config.baseBranch}...HEAD`;
+      const filesOut = runGit(`diff --name-only ${diffTarget}`, cwd);
+      changedFiles = filesOut.split("\n").map((f) => f.trim()).filter(Boolean);
+      const rawDiff = runGit(`diff ${diffTarget}`, cwd);
+      const MAX_DIFF_CHARS = 12e3;
+      prDiff = rawDiff.length > MAX_DIFF_CHARS ? `${rawDiff.slice(0, MAX_DIFF_CHARS)}
+... [diff truncated at ${MAX_DIFF_CHARS} chars]` : rawDiff;
+    } catch {
+    }
     prompt = buildReviewPrompt({
       issue,
       prNumber,
       reviewComments,
       verifyCommand: config.workspace.verifyCommand,
       agentsMd,
-      resultFilePath
+      resultFilePath,
+      changedFiles,
+      prDiff
     });
   } else {
+    let repoFiles;
+    try {
+      const allFiles = runGit("ls-files", cwd).split("\n").map((f) => f.trim()).filter((f) => f.length > 0 && !f.startsWith("_pr_flow/"));
+      const MAX_FILES = 200;
+      repoFiles = allFiles.length > MAX_FILES ? [...allFiles.slice(0, MAX_FILES), `... (${allFiles.length - MAX_FILES} more files)`] : allFiles;
+    } catch {
+    }
     prompt = buildImplementPrompt({
       issue,
       verifyCommand: config.workspace.verifyCommand,
       agentsMd,
-      resultFilePath
+      resultFilePath,
+      repoFiles
     });
   }
   const runResult = runAgentExecution({

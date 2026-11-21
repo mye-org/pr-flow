@@ -21,6 +21,8 @@ workspace:
       expect(res.right.agent.provider).toBe('gemini');
       expect(res.right.agent.fallbackModels).toEqual([]);
       expect(res.right.agent.maxRetries).toBe(3);
+      expect(res.right.agent.maxSessionTurns).toBe(25);
+      expect(res.right.agent.compressionThreshold).toBe(0.2);
       expect(res.right.triggers.reviewMode).toBe('changes_requested');
     }
   });
@@ -320,6 +322,126 @@ describe('OctokitGitHubAdapter.checkSetupPrerequisites', () => {
       expect(byName.get('pr-flow-status Issue Field')?.status).toBe('fail');
       expect(byName.get('Required labels')?.status).toBe('fail');
       expect(byName.get('Actions secret (GEMINI_API_KEY)')?.status).toBe('fail');
+    }
+  });
+});
+
+describe('OctokitGitHubAdapter.getPrReviewComments', () => {
+  it('filters out resolved review threads, approved reviews, and pre-fix comments', async () => {
+    const adapter = new OctokitGitHubAdapter({
+      token: 'test-token',
+      owner: 'mye-org',
+      repo: 'pr-flow-demo',
+    });
+    const octokit = (
+      adapter as unknown as {
+        octokit: {
+          graphql: (...args: unknown[]) => Promise<unknown>;
+          rest: {
+            pulls: {
+              listReviews: (...args: unknown[]) => Promise<unknown>;
+              listReviewComments: (...args: unknown[]) => Promise<unknown>;
+            };
+            issues: {
+              listComments: (...args: unknown[]) => Promise<unknown>;
+            };
+          };
+        };
+      }
+    ).octokit;
+
+    vi.spyOn(octokit.rest.pulls, 'listReviews').mockResolvedValueOnce({
+      data: [
+        {
+          state: 'CHANGES_REQUESTED',
+          body: 'Old review round',
+          submitted_at: '2026-11-20T10:00:00Z',
+          user: { login: 'reviewer' },
+        },
+        {
+          state: 'APPROVED',
+          body: 'LGTM',
+          submitted_at: '2026-11-20T12:00:00Z',
+          user: { login: 'reviewer' },
+        },
+        {
+          state: 'CHANGES_REQUESTED',
+          body: 'New review feedback',
+          submitted_at: '2026-11-20T13:00:00Z',
+          user: { login: 'reviewer' },
+        },
+      ],
+    });
+
+    vi.spyOn(octokit.rest.issues, 'listComments').mockResolvedValueOnce({
+      data: [
+        {
+          user: { type: 'User', login: 'reviewer' },
+          body: 'Stale PR comment',
+          created_at: '2026-11-20T10:30:00Z',
+        },
+        {
+          user: { type: 'Bot', login: 'github-actions[bot]' },
+          body: 'Applied review fixes on `ai/issue-1`.\n\n**Summary:** fixed',
+          created_at: '2026-11-20T11:00:00Z',
+        },
+        {
+          user: { type: 'User', login: 'reviewer' },
+          body: 'Fresh PR comment',
+          created_at: '2026-11-20T13:05:00Z',
+        },
+      ],
+    });
+
+    vi.spyOn(octokit, 'graphql').mockResolvedValueOnce({
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            nodes: [
+              {
+                isResolved: true,
+                isOutdated: true,
+                comments: {
+                  nodes: [
+                    {
+                      path: 'src/old.ts',
+                      line: 10,
+                      originalLine: 10,
+                      body: 'Already resolved',
+                      author: { login: 'reviewer' },
+                    },
+                  ],
+                },
+              },
+              {
+                isResolved: false,
+                isOutdated: false,
+                comments: {
+                  nodes: [
+                    {
+                      path: 'src/new.ts',
+                      line: 22,
+                      originalLine: 22,
+                      body: 'Please rename this',
+                      author: { login: 'reviewer' },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const res = await adapter.getPrReviewComments(99)();
+    expect(E.isRight(res)).toBe(true);
+    if (E.isRight(res)) {
+      expect(res.right).toEqual([
+        '[Review CHANGES_REQUESTED by reviewer]: New review feedback',
+        '[Inline comment on src/new.ts:22 by reviewer]: Please rename this',
+        '[PR comment by reviewer]: Fresh PR comment',
+      ]);
     }
   });
 });

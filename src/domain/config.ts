@@ -20,6 +20,9 @@ export const PrFlowConfigSchema = z.object({
       maxRetries: z.number().int().min(0).default(3),
       command: z.string().optional(),
       timeoutMinutes: z.number().int().min(1).default(20),
+      maxSessionTurns: z.number().int().min(1).default(25),
+      compressionThreshold: z.number().min(0.05).max(0.95).default(0.2),
+      thinkingBudget: z.number().int().min(0).optional(),
     })
     .default({}),
   triggers: z

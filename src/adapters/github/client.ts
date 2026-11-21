@@ -890,13 +890,8 @@ export class OctokitGitHubAdapter implements GitHubPort {
   getPrReviewComments(prNumber: number): TE.TaskEither<DomainError, string[]> {
     return TE.tryCatch(
       async () => {
-        const [reviews, reviewComments, issueComments] = await Promise.all([
+        const [reviews, issueComments] = await Promise.all([
           this.octokit.rest.pulls.listReviews({
-            owner: this.owner,
-            repo: this.repo,
-            pull_number: prNumber,
-          }),
-          this.octokit.rest.pulls.listReviewComments({
             owner: this.owner,
             repo: this.repo,
             pull_number: prNumber,
@@ -908,21 +903,126 @@ export class OctokitGitHubAdapter implements GitHubPort {
           }),
         ]);
 
+        // Find the timestamp of the latest pr-flow bot review-fix comment to avoid re-sending prior rounds
+        let lastFixAtMs = 0;
+        for (const ic of issueComments.data) {
+          if (
+            ic.user?.type === 'Bot' &&
+            (ic.body ?? '').includes('Applied review fixes on `') &&
+            ic.created_at
+          ) {
+            const ts = Date.parse(ic.created_at);
+            if (!Number.isNaN(ts) && ts > lastFixAtMs) {
+              lastFixAtMs = ts;
+            }
+          }
+        }
+
         const collected: string[] = [];
         for (const r of reviews.data) {
-          if (r.body && r.body.trim().length > 0) {
-            collected.push(`[Review ${r.state} by ${r.user?.login ?? 'unknown'}]: ${r.body}`);
+          if (!r.body || r.body.trim().length === 0) continue;
+          if (r.state === 'APPROVED' || r.state === 'DISMISSED') continue;
+          const submittedMs = r.submitted_at ? Date.parse(r.submitted_at) : Number.NaN;
+          if (lastFixAtMs > 0 && !Number.isNaN(submittedMs) && submittedMs <= lastFixAtMs) {
+            continue;
           }
+          collected.push(`[Review ${r.state} by ${r.user?.login ?? 'unknown'}]: ${r.body}`);
         }
-        for (const rc of reviewComments.data) {
-          collected.push(
-            `[Inline comment on ${rc.path}:${rc.line ?? rc.original_line ?? '?'} by ${rc.user?.login ?? 'unknown'}]: ${rc.body}`,
+
+        // Prefer GraphQL reviewThreads so we can skip resolved threads
+        let usedGraphqlThreads = false;
+        try {
+          const threadData = await this.octokit.graphql<{
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: Array<{
+                    isResolved: boolean;
+                    isOutdated: boolean;
+                    comments: {
+                      nodes: Array<{
+                        path?: string | null;
+                        line?: number | null;
+                        originalLine?: number | null;
+                        body: string;
+                        author?: { login?: string | null } | null;
+                      }>;
+                    };
+                  }>;
+                };
+              } | null;
+            };
+          }>(
+            `
+            query GetPrReviewThreads($owner: String!, $repo: String!, $number: Int!) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $number) {
+                  reviewThreads(first: 100) {
+                    nodes {
+                      isResolved
+                      isOutdated
+                      comments(first: 20) {
+                        nodes {
+                          path
+                          line
+                          originalLine
+                          body
+                          author {
+                            login
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            `,
+            { owner: this.owner, repo: this.repo, number: prNumber },
           );
-        }
-        for (const ic of issueComments.data) {
-          if (ic.user?.type !== 'Bot') {
-            collected.push(`[PR comment by ${ic.user?.login ?? 'unknown'}]: ${ic.body ?? ''}`);
+
+          const threads = threadData?.repository?.pullRequest?.reviewThreads?.nodes;
+          if (Array.isArray(threads)) {
+            usedGraphqlThreads = true;
+            for (const thread of threads) {
+              if (thread.isResolved) continue;
+              for (const rc of thread.comments.nodes) {
+                const loc = `${rc.path ?? '?'}:${rc.line ?? rc.originalLine ?? '?'}`;
+                const outdatedTag = thread.isOutdated ? ' (outdated)' : '';
+                collected.push(
+                  `[Inline comment on ${loc}${outdatedTag} by ${rc.author?.login ?? 'unknown'}]: ${rc.body}`,
+                );
+              }
+            }
           }
+        } catch {
+          // Fall back to REST listReviewComments if GraphQL is unavailable
+        }
+
+        if (!usedGraphqlThreads) {
+          const reviewComments = await this.octokit.rest.pulls.listReviewComments({
+            owner: this.owner,
+            repo: this.repo,
+            pull_number: prNumber,
+          });
+          for (const rc of reviewComments.data) {
+            const createdMs = rc.created_at ? Date.parse(rc.created_at) : Number.NaN;
+            if (lastFixAtMs > 0 && !Number.isNaN(createdMs) && createdMs <= lastFixAtMs) {
+              continue;
+            }
+            collected.push(
+              `[Inline comment on ${rc.path}:${rc.line ?? rc.original_line ?? '?'} by ${rc.user?.login ?? 'unknown'}]: ${rc.body}`,
+            );
+          }
+        }
+
+        for (const ic of issueComments.data) {
+          if (ic.user?.type === 'Bot') continue;
+          const createdMs = ic.created_at ? Date.parse(ic.created_at) : Number.NaN;
+          if (lastFixAtMs > 0 && !Number.isNaN(createdMs) && createdMs <= lastFixAtMs) {
+            continue;
+          }
+          collected.push(`[PR comment by ${ic.user?.login ?? 'unknown'}]: ${ic.body ?? ''}`);
         }
         return collected;
       },

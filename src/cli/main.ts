@@ -402,6 +402,24 @@ program
     let prompt: string;
     if (prNumber) {
       const reviewComments = await runOrExit(github.getPrReviewComments(prNumber));
+      let changedFiles: string[] | undefined;
+      let prDiff: string | undefined;
+      try {
+        const diffTarget = `origin/${config.baseBranch}...HEAD`;
+        const filesOut = runGit(`diff --name-only ${diffTarget}`, cwd);
+        changedFiles = filesOut
+          .split('\n')
+          .map((f) => f.trim())
+          .filter(Boolean);
+        const rawDiff = runGit(`diff ${diffTarget}`, cwd);
+        const MAX_DIFF_CHARS = 12_000;
+        prDiff =
+          rawDiff.length > MAX_DIFF_CHARS
+            ? `${rawDiff.slice(0, MAX_DIFF_CHARS)}\n... [diff truncated at ${MAX_DIFF_CHARS} chars]`
+            : rawDiff;
+      } catch {
+        // Best-effort diff pre-loading
+      }
       prompt = buildReviewPrompt({
         issue,
         prNumber,
@@ -409,13 +427,30 @@ program
         verifyCommand: config.workspace.verifyCommand,
         agentsMd,
         resultFilePath,
+        changedFiles,
+        prDiff,
       });
     } else {
+      let repoFiles: string[] | undefined;
+      try {
+        const allFiles = runGit('ls-files', cwd)
+          .split('\n')
+          .map((f) => f.trim())
+          .filter((f) => f.length > 0 && !f.startsWith('_pr_flow/'));
+        const MAX_FILES = 200;
+        repoFiles =
+          allFiles.length > MAX_FILES
+            ? [...allFiles.slice(0, MAX_FILES), `... (${allFiles.length - MAX_FILES} more files)`]
+            : allFiles;
+      } catch {
+        // Best-effort file tree pre-loading
+      }
       prompt = buildImplementPrompt({
         issue,
         verifyCommand: config.workspace.verifyCommand,
         agentsMd,
         resultFilePath,
+        repoFiles,
       });
     }
 

@@ -16,7 +16,7 @@ import {
   isoTitle,
 } from '../src/domain/newtypes.js';
 
-function createMockGithub(overrides: Partial<GitHubPort> = {}): GitHubPort {
+function createMockGithub(overrides: Partial<GitHubPort> = {}) {
   return {
     getIssue: vi.fn(),
     listAllIssues: vi.fn(),

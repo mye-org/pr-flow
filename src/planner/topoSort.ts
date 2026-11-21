@@ -9,7 +9,7 @@ type Graph = {
   readonly adj: ReadonlyMap<string, ReadonlyArray<string>>;
 };
 
-const addEdge = (graph: Graph, from: string, to: string): Graph => {
+const addEdge = (graph: Graph, from: string, to: string) => {
   if (!graph.byId.has(from) || !graph.byId.has(to) || from === to) {
     return graph;
   }
@@ -24,13 +24,13 @@ const addEdge = (graph: Graph, from: string, to: string): Graph => {
   };
 };
 
-const addIssueEdges = (graph: Graph, issue: PlanIssueNode): Graph =>
+const addIssueEdges = (graph: Graph, issue: PlanIssueNode) =>
   pipe(
     issue.parentId ? addEdge(graph, issue.parentId, issue.id) : graph,
     (g) => pipe(issue.blockedBy, RA.reduce(g, (acc, dep) => addEdge(acc, dep, issue.id))),
   );
 
-const buildGraph = (manifest: PlanManifest): Graph =>
+const buildGraph = (manifest: PlanManifest) =>
   pipe(
     {
       byId: new Map(pipe(manifest.issues, RA.map((i) => [i.id, i] as const))),
@@ -43,7 +43,7 @@ const buildGraph = (manifest: PlanManifest): Graph =>
 const decrementNeighbors = (
   neighbors: ReadonlyArray<string>,
   inDegree: ReadonlyMap<string, number>,
-): { readonly inDegree: ReadonlyMap<string, number>; readonly newlyReady: ReadonlyArray<string> } =>
+) =>
   pipe(
     neighbors,
     RA.reduce({ inDegree, newlyReady: [] as ReadonlyArray<string> }, (acc, next) => {
@@ -55,42 +55,43 @@ const decrementNeighbors = (
     }),
   );
 
-const stepWithNode = (
-  current: string,
-  restQueue: ReadonlyArray<string>,
+type KahnStepFn = (
+  queue: ReadonlyArray<string>,
   inDegree: ReadonlyMap<string, number>,
   graph: Graph,
   acc: ReadonlyArray<PlanIssueNode>,
-): ReadonlyArray<PlanIssueNode> => {
+) => ReadonlyArray<PlanIssueNode>;
+
+const stepWithNode = (
+  current: string,
+  queue: ReadonlyArray<string>,
+  inDegree: ReadonlyMap<string, number>,
+  graph: Graph,
+  acc: ReadonlyArray<PlanIssueNode>,
+) => {
   const node = graph.byId.get(current);
   const { inDegree: nextInDegree, newlyReady } = decrementNeighbors(
     graph.adj.get(current) ?? [],
     inDegree,
   );
-  return kahnStep([...restQueue, ...newlyReady], nextInDegree, graph, node ? [...acc, node] : acc);
+  return kahnStep([...queue.slice(1), ...newlyReady], nextInDegree, graph, node ? [...acc, node] : acc);
 };
 
-function kahnStep(
-  queue: ReadonlyArray<string>,
-  inDegree: ReadonlyMap<string, number>,
-  graph: Graph,
-  acc: ReadonlyArray<PlanIssueNode>,
-): ReadonlyArray<PlanIssueNode> {
-  return pipe(
+const kahnStep: KahnStepFn = (queue, inDegree, graph, acc) =>
+  pipe(
     RA.head(queue),
     O.match(
       () => acc,
-      (current) => stepWithNode(current, queue.slice(1), inDegree, graph, acc),
+      (current) => stepWithNode(current, queue, inDegree, graph, acc),
     ),
   );
-}
 
 /**
  * Topologically sorts plan issues so that:
  * 1. Parent issues are created before their children.
  * 2. Blocking issues are ordered before the issues they block.
  */
-export function topoSortPlan(manifest: PlanManifest): ReadonlyArray<PlanIssueNode> {
+export function topoSortPlan(manifest: PlanManifest) {
   return pipe(buildGraph(manifest), (graph) =>
     kahnStep(
       pipe(

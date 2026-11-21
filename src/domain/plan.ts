@@ -1,5 +1,5 @@
 import * as E from 'fp-ts/lib/Either';
-import { pipe } from 'fp-ts/lib/function';
+import { flow, pipe } from 'fp-ts/lib/function';
 import * as O from 'fp-ts/lib/Option';
 import * as RA from 'fp-ts/lib/ReadonlyArray';
 import { match } from 'ts-pattern';
@@ -37,7 +37,7 @@ export type PlanManifest = z.infer<typeof PlanManifestSchema>;
 
 const validatePlanSchema = (
   parsed: z.SafeParseReturnType<z.input<typeof PlanManifestSchema>, PlanManifest>,
-): E.Either<DomainError, PlanManifest> =>
+) =>
   match(parsed)
     .with({ success: true }, ({ data }) => E.right(data))
     .with({ success: false }, ({ error }) =>
@@ -54,17 +54,23 @@ const validatePlanSchema = (
     )
     .exhaustive();
 
-export function parsePlanManifest(yamlContent: string): E.Either<DomainError, PlanManifest> {
+const parsePlanYaml = flow(
+  (s: string) => parseYaml(s) as z.input<typeof PlanManifestSchema>,
+  (raw) => PlanManifestSchema.safeParse(raw),
+);
+
+const formatPlanYamlError = (errMessage: string) =>
+  ({
+    type: 'PLAN_VALIDATION_ERROR',
+    message: isoMessage.wrap(`Failed to parse plan manifest YAML: ${errMessage}`),
+    details: O.none,
+  }) satisfies DomainError;
+
+export function parsePlanManifest(yamlContent: string) {
   return pipe(
     E.tryCatch(
-      () => PlanManifestSchema.safeParse(parseYaml(yamlContent)),
-      (err): DomainError => ({
-        type: 'PLAN_VALIDATION_ERROR',
-        message: isoMessage.wrap(
-          `Failed to parse plan manifest YAML: ${err instanceof Error ? err.message : String(err)}`,
-        ),
-        details: O.none,
-      }),
+      () => parsePlanYaml(yamlContent),
+      (err) => formatPlanYamlError(err instanceof Error ? err.message : String(err)),
     ),
     E.chain(validatePlanSchema),
   );

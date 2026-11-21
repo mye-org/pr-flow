@@ -2,11 +2,11 @@ import type { IssueNode } from '../../domain/issue.js';
 import { isoBody, isoIssueNumber, isoTitle } from '../../domain/newtypes.js';
 import type { PrReviewThread } from '../github/types.js';
 
-function formatAgentsSection(agentsMd?: string): string {
+function formatAgentsSection(agentsMd?: string) {
   return agentsMd ? `\n## Repository Instructions (AGENTS.md)\n${agentsMd.trim()}\n` : '';
 }
 
-function formatRepoFilesSection(repoFiles?: ReadonlyArray<string>): string {
+function formatRepoFilesSection(repoFiles?: ReadonlyArray<string>) {
   if (!repoFiles || repoFiles.length === 0) return '';
   return `\n## Repository File Tree\n\`\`\`\n${repoFiles.join('\n')}\n\`\`\`\n`;
 }
@@ -17,7 +17,7 @@ export function buildImplementPrompt(params: {
   readonly agentsMd?: string;
   readonly resultFilePath: string;
   readonly repoFiles?: ReadonlyArray<string>;
-}): string {
+}) {
   const agentsSection = formatAgentsSection(params.agentsMd);
   const repoFilesSection = formatRepoFilesSection(params.repoFiles);
   const issueBody = isoBody.unwrap(params.issue.body);
@@ -58,7 +58,7 @@ export function buildReviewPrompt(params: {
   readonly resultFilePath: string;
   readonly changedFiles?: ReadonlyArray<string>;
   readonly prDiff?: string;
-}): string {
+}) {
   const agentsSection = formatAgentsSection(params.agentsMd);
   const threads = params.reviewThreads ?? [];
   const threadsBlock =

@@ -12,30 +12,36 @@ type DupAcc = {
   readonly errors: ReadonlyArray<string>;
 };
 
+const initDupAcc = (epicId: O.Option<string>) =>
+  ({
+    allIds: pipe(
+      epicId,
+      O.match(
+        () => new Set<string>(),
+        (id) => new Set<string>([id]),
+      ),
+    ),
+    errors: [],
+  }) satisfies DupAcc;
+
 const collectDuplicateErrors = (
   issues: ReadonlyArray<PlanIssueNode>,
   epicId: O.Option<string>,
-): DupAcc =>
+) =>
   pipe(
     issues,
-    RA.reduce(
-      {
-        allIds: O.isSome(epicId) ? new Set<string>([epicId.value]) : new Set<string>(),
-        errors: [],
-      } satisfies DupAcc,
-      (acc: DupAcc, issue) => ({
-        allIds: new Set([...acc.allIds, issue.id]),
-        errors: acc.allIds.has(issue.id)
-          ? [...acc.errors, `Duplicate issue id '${issue.id}'`]
-          : acc.errors,
-      }),
-    ),
+    RA.reduce(initDupAcc(epicId), (acc: DupAcc, issue) => ({
+      allIds: new Set([...acc.allIds, issue.id]),
+      errors: acc.allIds.has(issue.id)
+        ? [...acc.errors, `Duplicate issue id '${issue.id}'`]
+        : acc.errors,
+    })),
   );
 
 const collectRefErrorsForIssue = (
   issue: PlanIssueNode,
   allIds: ReadonlySet<string>,
-): ReadonlyArray<string> => [
+) => [
   ...(issue.parentId && !allIds.has(issue.parentId)
     ? [`Issue '${issue.id}' references unknown parentId '${issue.parentId}'`]
     : []),
@@ -51,7 +57,7 @@ const collectRefErrorsForIssue = (
 const addDepsToAdj = (
   adj: ReadonlyMap<string, ReadonlyArray<string>>,
   issue: PlanIssueNode,
-): ReadonlyMap<string, ReadonlyArray<string>> =>
+) =>
   pipe(
     issue.blockedBy,
     RA.reduce(adj, (m, dep) => new Map(m).set(dep, [...(m.get(dep) ?? []), issue.id])),
@@ -60,7 +66,7 @@ const addDepsToAdj = (
 const buildAdjacency = (
   allIds: ReadonlySet<string>,
   issues: ReadonlyArray<PlanIssueNode>,
-): ReadonlyMap<string, ReadonlyArray<string>> =>
+) =>
   pipe(
     issues,
     RA.reduce(
@@ -76,17 +82,31 @@ type DfsResult = {
   readonly cycle: O.Option<ReadonlyArray<string>>;
 };
 
+type DfsNodeFn = (
+  nodeId: string,
+  path: ReadonlyArray<string>,
+  visiting: ReadonlySet<string>,
+  visited: ReadonlySet<string>,
+  adj: ReadonlyMap<string, ReadonlyArray<string>>,
+) => DfsResult;
+
 const dfsNeighbors = (
   neighbors: ReadonlyArray<string>,
   path: ReadonlyArray<string>,
   visiting: ReadonlySet<string>,
   visited: ReadonlySet<string>,
   adj: ReadonlyMap<string, ReadonlyArray<string>>,
-): DfsResult =>
+) =>
   pipe(
     neighbors,
     RA.reduce({ visited, cycle: O.none }, (acc: DfsResult, next) =>
-      O.isSome(acc.cycle) ? acc : dfsNode(next, path, visiting, acc.visited, adj),
+      pipe(
+        acc.cycle,
+        O.match(
+          () => dfsNode(next, path, visiting, acc.visited, adj),
+          () => acc,
+        ),
+      ),
     ),
   );
 
@@ -96,28 +116,22 @@ const exploreNode = (
   visiting: ReadonlySet<string>,
   visited: ReadonlySet<string>,
   adj: ReadonlyMap<string, ReadonlyArray<string>>,
-): DfsResult =>
+) =>
   pipe(
     dfsNeighbors(adj.get(nodeId) ?? [], [...path, nodeId], new Set([...visiting, nodeId]), visited, adj),
     (res) => ({ visited: new Set([...res.visited, nodeId]), cycle: res.cycle }),
   );
 
-function dfsNode(
-  nodeId: string,
-  path: ReadonlyArray<string>,
-  visiting: ReadonlySet<string>,
-  visited: ReadonlySet<string>,
-  adj: ReadonlyMap<string, ReadonlyArray<string>>,
-): DfsResult {
+const dfsNode: DfsNodeFn = (nodeId, path, visiting, visited, adj) => {
   if (visiting.has(nodeId)) return { visited, cycle: O.some([...path, nodeId]) };
   if (visited.has(nodeId)) return { visited, cycle: O.none };
   return exploreNode(nodeId, path, visiting, visited, adj);
-}
+};
 
 const findCycle = (
   allIds: ReadonlySet<string>,
   adj: ReadonlyMap<string, ReadonlyArray<string>>,
-): O.Option<ReadonlyArray<string>> =>
+) =>
   pipe(
     Array.from(allIds),
     RA.reduce({ visited: new Set<string>(), cycle: O.none }, (acc: DfsResult, id) =>
@@ -131,11 +145,11 @@ const findCycle = (
 const checkCycles = (
   manifest: PlanManifest,
   allIds: ReadonlySet<string>,
-): E.Either<DomainError, PlanManifest> =>
+) =>
   pipe(
     findCycle(allIds, buildAdjacency(allIds, manifest.issues)),
     O.match(
-      () => E.right(manifest),
+      () => E.right<DomainError, PlanManifest>(manifest),
       (cycle) =>
         E.left<DomainError, PlanManifest>({
           type: 'PLAN_VALIDATION_ERROR',
@@ -149,7 +163,7 @@ const validateReferences = (
   manifest: PlanManifest,
   allIds: ReadonlySet<string>,
   dupErrors: ReadonlyArray<string>,
-): E.Either<DomainError, PlanManifest> =>
+) =>
   pipe(
     [...dupErrors, ...pipe(manifest.issues, RA.chain((issue) => collectRefErrorsForIssue(issue, allIds)))],
     (allErrors) =>
@@ -165,7 +179,7 @@ const validateReferences = (
         .exhaustive(),
   );
 
-export function validatePlanDag(manifest: PlanManifest): E.Either<DomainError, PlanManifest> {
+export function validatePlanDag(manifest: PlanManifest) {
   return pipe(
     collectDuplicateErrors(manifest.issues, O.fromNullable(manifest.epic?.id)),
     ({ allIds, errors }) => validateReferences(manifest, allIds, errors),

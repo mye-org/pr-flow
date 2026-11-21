@@ -29,7 +29,7 @@ const TRANSIENT_ERROR_PATTERNS: ReadonlyArray<RegExp> = [
   /EAI_AGAIN/,
 ];
 
-export function isTransientAgentError(output: string, timedOut: boolean): boolean {
+export function isTransientAgentError(output: string, timedOut: boolean) {
   if (timedOut) return true;
   return TRANSIENT_ERROR_PATTERNS.some((pattern) => pattern.test(output));
 }
@@ -40,7 +40,7 @@ const MODEL_UNAVAILABLE_PATTERNS: ReadonlyArray<RegExp> = [
   /\b404\b/,
 ];
 
-export function isModelFallbackError(output: string, timedOut: boolean): boolean {
+export function isModelFallbackError(output: string, timedOut: boolean) {
   return (
     isTransientAgentError(output, timedOut) ||
     MODEL_UNAVAILABLE_PATTERNS.some((pattern) => pattern.test(output))
@@ -52,7 +52,7 @@ function runShell(
   cwd: string,
   env?: NodeJS.ProcessEnv,
   timeoutMs?: number,
-): { ok: boolean; status: number; output: string; timedOut: boolean } {
+) {
   const res = spawnSync('bash', ['-lc', command], {
     cwd,
     env: { ...process.env, ...env },
@@ -71,7 +71,7 @@ function runShell(
   };
 }
 
-function resetWorkingTree(cwd: string, outputDir: string): void {
+function resetWorkingTree(cwd: string, outputDir: string) {
   try {
     execSync('git checkout -- .', { cwd, stdio: 'pipe' });
     const relOut = path.relative(cwd, outputDir);
@@ -85,7 +85,7 @@ function resetWorkingTree(cwd: string, outputDir: string): void {
   }
 }
 
-function tryReadResult(resultPath: string): AgentResult | null {
+function tryReadResult(resultPath: string) {
   if (!fs.existsSync(resultPath)) return null;
   try {
     const rawJson: unknown = JSON.parse(fs.readFileSync(resultPath, 'utf-8'));
@@ -110,15 +110,15 @@ export type GeminiJsonOutput = {
   error?: string;
 }
 
-function toFiniteNumber(value: unknown): number | undefined {
+function toFiniteNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
-export function parseGeminiJsonOutput(rawOutput: string): GeminiJsonOutput | null {
+export function parseGeminiJsonOutput(rawOutput: string) {
   const trimmed = rawOutput.trim();
   if (!trimmed) return null;
 
-  const tryParse = (candidate: string): Record<string, unknown> | null => {
+  const tryParse = (candidate: string) => {
     try {
       const parsed: unknown = JSON.parse(candidate);
       return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
@@ -208,7 +208,7 @@ export function parseGeminiJsonOutput(rawOutput: string): GeminiJsonOutput | nul
   return { response, stats, error };
 }
 
-export function extractAgentResultFromText(text: string): AgentResult | null {
+export function extractAgentResultFromText(text: string) {
   const trimmed = text.trim();
   if (!trimmed) return null;
 
@@ -235,7 +235,7 @@ export function extractAgentResultFromText(text: string): AgentResult | null {
   return null;
 }
 
-export function buildGeminiSettings(config: PrFlowConfig): Record<string, unknown> {
+export function buildGeminiSettings(config: PrFlowConfig) {
   const settings: Record<string, unknown> = {
     model: {
       maxSessionTurns: config.agent.maxSessionTurns,
@@ -263,13 +263,13 @@ export function buildGeminiSettings(config: PrFlowConfig): Record<string, unknow
   return settings;
 }
 
-export function computeAttemptTimeoutMs(remainingMs: number, remainingModels: number): number {
+export function computeAttemptTimeoutMs(remainingMs: number, remainingModels: number) {
   if (remainingModels <= 1) return Math.max(60_000, remainingMs);
   const reserveForFallbacks = Math.min(5 * 60_000, Math.floor(remainingMs * 0.25));
   return Math.max(60_000, remainingMs - reserveForFallbacks);
 }
 
-function logTokenUsage(modelName: string, stats: GeminiUsageStats): void {
+function logTokenUsage(modelName: string, stats: GeminiUsageStats) {
   const parts = [
     `model=${modelName}`,
     stats.totalTurns !== undefined ? `turns=${String(stats.totalTurns)}` : null,
@@ -297,7 +297,7 @@ function withTemporaryGeminiSettings<T>(
   cwd: string,
   config: PrFlowConfig,
   fn: () => T,
-): T {
+) {
   if (config.agent.provider !== 'gemini') {
     return fn();
   }
@@ -358,7 +358,7 @@ export function runAgentExecution(params: {
   prompt: string;
   cwd: string;
   outputDir: string;
-}): E.Either<DomainError, AgentRunOutput> {
+}) {
   const { config, prompt, cwd, outputDir } = params;
   fs.mkdirSync(outputDir, { recursive: true });
 
@@ -370,7 +370,7 @@ export function runAgentExecution(params: {
   if (config.workspace.setupCommand.trim().length > 0) {
     const setup = runShell(config.workspace.setupCommand, cwd);
     if (!setup.ok) {
-      return E.left({
+      return E.left<DomainError, AgentRunOutput>({
         type: 'AGENT_EXECUTION_ERROR',
         message: isoMessage.wrap(`Workspace setupCommand failed: ${setup.output}`),
         exitCode: O.some(isoCount.wrap(setup.status)),
@@ -465,7 +465,7 @@ export function runAgentExecution(params: {
 
   if (lastRun && !lastRun.ok && !parsedResult) {
     const retryable = isTransientAgentError(lastRun.output, lastRun.timedOut);
-    return E.left({
+    return E.left<DomainError, AgentRunOutput>({
       type: 'AGENT_EXECUTION_ERROR',
       message: isoMessage.wrap(`Agent CLI exited with code ${String(lastRun.status)}: ${lastRun.output.slice(-1500)}`),
       exitCode: O.some(isoCount.wrap(lastRun.status)),
@@ -483,7 +483,7 @@ export function runAgentExecution(params: {
       testsRun: true,
     };
     fs.writeFileSync(resultPath, JSON.stringify(fallback, null, 2), 'utf-8');
-    return E.right({
+    return E.right<DomainError, AgentRunOutput>({
       result: fallback,
       patchPath,
       resultPath,
@@ -510,14 +510,14 @@ export function runAgentExecution(params: {
     }
     const diff = execSync('git diff --cached --binary', { cwd, encoding: 'utf-8' });
     fs.writeFileSync(patchPath, diff, 'utf-8');
-    return E.right({
+    return E.right<DomainError, AgentRunOutput>({
       result: finalResult,
       patchPath,
       resultPath,
       hasChanges: diff.trim().length > 0,
     });
   } catch (err) {
-    return E.left({
+    return E.left<DomainError, AgentRunOutput>({
       type: 'GIT_ERROR',
       message: isoMessage.wrap(`Failed to export changes.patch: ${err instanceof Error ? err.message : String(err)}`),
     });

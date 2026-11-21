@@ -14,7 +14,7 @@ export async function replyAndResolveReviewThreads(params: {
   readonly branch: string;
   readonly agentResult: AgentResult;
   readonly threads: ReadonlyArray<PrReviewThread>;
-}): Promise<ReviewFollowUpResult> {
+}) {
   const { github, branch, agentResult, threads } = params;
   const replyByThreadId = new Map<string, string>();
 

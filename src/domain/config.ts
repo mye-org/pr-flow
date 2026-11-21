@@ -41,7 +41,7 @@ export const PrFlowConfigSchema = z.object({
 
 export type PrFlowConfig = z.infer<typeof PrFlowConfigSchema>;
 
-const validateCustomAgentCommand = (config: PrFlowConfig): E.Either<DomainError, PrFlowConfig> =>
+const validateCustomAgentCommand = (config: PrFlowConfig) =>
   match(config.agent.provider === 'custom' && !config.agent.command)
     .with(true, () =>
       E.left<DomainError, PrFlowConfig>({
@@ -54,7 +54,7 @@ const validateCustomAgentCommand = (config: PrFlowConfig): E.Either<DomainError,
 
 const validateConfigSchema = (
   parsed: z.SafeParseReturnType<z.input<typeof PrFlowConfigSchema>, PrFlowConfig>,
-): E.Either<DomainError, PrFlowConfig> =>
+) =>
   match(parsed)
     .with({ success: true }, ({ data }) => validateCustomAgentCommand(data))
     .with({ success: false }, ({ error }) =>
@@ -70,16 +70,17 @@ const validateConfigSchema = (
     )
     .exhaustive();
 
-export function parseConfig(yamlContent: string): E.Either<DomainError, PrFlowConfig> {
+export function parseConfig(yamlContent: string) {
   return pipe(
     E.tryCatch(
       () => PrFlowConfigSchema.safeParse(parseYaml(yamlContent)),
-      (err): DomainError => ({
-        type: 'CONFIG_ERROR',
-        message: isoMessage.wrap(
-          `Failed to parse pr-flow.config.yml: ${err instanceof Error ? err.message : String(err)}`,
-        ),
-      }),
+      (err) =>
+        ({
+          type: 'CONFIG_ERROR',
+          message: isoMessage.wrap(
+            `Failed to parse pr-flow.config.yml: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        }) satisfies DomainError,
     ),
     E.chain(validateConfigSchema),
   );

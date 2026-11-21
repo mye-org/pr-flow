@@ -14,10 +14,10 @@ export type PickupGuardContext = {
   readonly blockingIssues: ReadonlyArray<IssueNumber>;
 };
 
-const checkLeaf = (ctx: PickupGuardContext): E.Either<GuardError, PickupGuardContext> =>
-  E.fromPredicate(
-    (c: PickupGuardContext) => isExecutableLeaf(c.issue),
-    (c): GuardError => ({
+const checkLeaf = (ctx: PickupGuardContext) =>
+  E.fromPredicate<PickupGuardContext, GuardError>(
+    (c) => isExecutableLeaf(c.issue),
+    (c) => ({
       type: 'NOT_AN_EXECUTABLE_LEAF',
       issueNumber: c.issue.number,
       issueType: c.issue.type,
@@ -25,46 +25,46 @@ const checkLeaf = (ctx: PickupGuardContext): E.Either<GuardError, PickupGuardCon
     }),
   )(ctx);
 
-const checkReadyState = (ctx: PickupGuardContext): E.Either<GuardError, PickupGuardContext> =>
-  E.fromPredicate(
-    (c: PickupGuardContext) => c.issue.status === 'ready',
-    (c): GuardError => ({
+const checkReadyState = (ctx: PickupGuardContext) =>
+  E.fromPredicate<PickupGuardContext, GuardError>(
+    (c) => c.issue.status === 'ready',
+    (c) => ({
       type: 'INVALID_STATE_FOR_PICKUP',
       issueNumber: c.issue.number,
       currentStatus: c.issue.status,
     }),
   )(ctx);
 
-const checkBlockers = (ctx: PickupGuardContext): E.Either<GuardError, PickupGuardContext> =>
-  E.fromPredicate(
-    (c: PickupGuardContext) => c.blockerState === 'all_closed',
-    (c): GuardError => ({
+const checkBlockers = (ctx: PickupGuardContext) =>
+  E.fromPredicate<PickupGuardContext, GuardError>(
+    (c) => c.blockerState === 'all_closed',
+    (c) => ({
       type: 'BLOCKED_BY_DEPENDENCIES',
       blockingIssues: c.blockingIssues,
     }),
   )(ctx);
 
-const checkNoOpenPr = (ctx: PickupGuardContext): E.Either<GuardError, PickupGuardContext> =>
-  E.fromPredicate(
-    (c: PickupGuardContext) => isoCount.unwrap(c.openPrCount) === 0,
-    (c): GuardError => ({
+const checkNoOpenPr = (ctx: PickupGuardContext) =>
+  E.fromPredicate<PickupGuardContext, GuardError>(
+    (c) => isoCount.unwrap(c.openPrCount) === 0,
+    (c) => ({
       type: 'PR_ALREADY_EXISTS',
       issueNumber: c.issue.number,
       existingPrCount: c.openPrCount,
     }),
   )(ctx);
 
-const checkWipLimit = (ctx: PickupGuardContext): E.Either<GuardError, PickupGuardContext> =>
-  E.fromPredicate(
-    (c: PickupGuardContext) => isoCount.unwrap(c.wipCount) < isoCount.unwrap(c.wipLimit),
-    (c): GuardError => ({
+const checkWipLimit = (ctx: PickupGuardContext) =>
+  E.fromPredicate<PickupGuardContext, GuardError>(
+    (c) => isoCount.unwrap(c.wipCount) < isoCount.unwrap(c.wipLimit),
+    (c) => ({
       type: 'WIP_LIMIT_REACHED',
       currentWip: c.wipCount,
       limit: c.wipLimit,
     }),
   )(ctx);
 
-export function checkPickupEligibility(ctx: PickupGuardContext): E.Either<GuardError, true> {
+export function checkPickupEligibility(ctx: PickupGuardContext) {
   return pipe(
     checkLeaf(ctx),
     E.chain(checkReadyState),

@@ -18,14 +18,14 @@ import {
 import { checkPickupEligibility } from '../src/machine/guards.js';
 import { transitionIssue } from '../src/machine/issueMachine.js';
 
-function makeIssue(overrides: Partial<IssueNode> = {}): IssueNode {
+function makeIssue(overrides: Partial<IssueNode> = {}) {
   return {
     number: isoIssueNumber.wrap(42),
     title: isoTitle.wrap('Implement auth middleware'),
     body: isoBody.wrap('Add JWT verification'),
-    state: 'open',
-    status: 'ready',
-    type: 'task',
+    state: 'open' as const,
+    status: 'ready' as const,
+    type: 'task' as const,
     labels: [isoLabelName.wrap('type:task'), isoLabelName.wrap('ai-managed')],
     subIssueNumbers: [],
     blockedByNumbers: [],
@@ -34,7 +34,7 @@ function makeIssue(overrides: Partial<IssueNode> = {}): IssueNode {
     parentNumber: O.none,
     updatedAt: isoIsoTimestamp.wrap('2026-11-20T00:00:00Z'),
     ...overrides,
-  };
+  } satisfies IssueNode;
 }
 
 describe('isExecutableLeaf', () => {
@@ -56,7 +56,7 @@ describe('isExecutableLeaf', () => {
 describe('checkPickupEligibility', () => {
   it('allows pickup when all guards pass', () => {
     expect(
-      E.isRight(
+      pipe(
         checkPickupEligibility({
           issue: makeIssue(),
           wipCount: isoCount.wrap(3),
@@ -65,6 +65,7 @@ describe('checkPickupEligibility', () => {
           blockerState: 'all_closed',
           blockingIssues: [],
         }),
+        E.isRight,
       ),
     ).toBe(true);
   });

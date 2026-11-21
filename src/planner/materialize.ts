@@ -1,4 +1,4 @@
-import { pipe } from 'fp-ts/lib/function';
+import { flow, pipe } from 'fp-ts/lib/function';
 import * as O from 'fp-ts/lib/Option';
 import * as RA from 'fp-ts/lib/ReadonlyArray';
 import * as TE from 'fp-ts/lib/TaskEither';
@@ -33,7 +33,7 @@ export const ISSUE_DEVELOPMENT_STANDARDS = [
   '- Always use **functional programming style**.',
 ].join('\n');
 
-export function formatIssueBody(body: string): string {
+export function formatIssueBody(body: string) {
   const trimmed = body.trim();
   if (trimmed.includes('## Development Standards')) {
     return trimmed;
@@ -46,7 +46,7 @@ export function formatIssueBody(body: string): string {
 const createEpicNode = (
   epic: NonNullable<PlanManifest['epic']>,
   github: GitHubPort,
-): TE.TaskEither<DomainError, ReadonlyMap<string, number>> =>
+) =>
   pipe(
     github.createIssue({
       title: epic.title,
@@ -64,7 +64,7 @@ const createEpicNode = (
 const createEpicIfPresent = (
   epic: PlanManifest['epic'],
   github: GitHubPort,
-): TE.TaskEither<DomainError, ReadonlyMap<string, number>> =>
+) =>
   pipe(
     O.fromNullable(epic),
     O.match(
@@ -73,7 +73,7 @@ const createEpicIfPresent = (
     ),
   );
 
-const nodeLabels = (node: PlanIssueNode): ReadonlyArray<string> =>
+const nodeLabels = (node: PlanIssueNode) =>
   Array.from(
     new Set([
       isoLabelName.unwrap(TYPE_TO_LABEL[node.type]),
@@ -86,7 +86,7 @@ const createSingleNode = (
   node: PlanIssueNode,
   idToNumber: ReadonlyMap<string, number>,
   github: GitHubPort,
-): TE.TaskEither<DomainError, ReadonlyMap<string, number>> =>
+) =>
   pipe(
     github.createIssue({ title: node.title, body: formatIssueBody(node.body), labels: nodeLabels(node) }),
     TE.chain((created) =>
@@ -101,7 +101,7 @@ const createAllNodes = (
   sorted: ReadonlyArray<PlanIssueNode>,
   initialMap: ReadonlyMap<string, number>,
   github: GitHubPort,
-): TE.TaskEither<DomainError, ReadonlyMap<string, number>> =>
+) =>
   pipe(
     sorted,
     RA.reduce(TE.right<DomainError, ReadonlyMap<string, number>>(initialMap), (acc, node) =>
@@ -112,26 +112,20 @@ const createAllNodes = (
     ),
   );
 
-type NodeLinks = {
-  readonly subLinks: ReadonlyArray<SubIssueLink>;
-  readonly depLinks: ReadonlyArray<DependencyLink>;
-  readonly tasks: ReadonlyArray<TE.TaskEither<DomainError, void>>;
-};
-
 const collectParentLink = (
   childNum: number,
   parentId: O.Option<string>,
   idToNumber: ReadonlyMap<string, number>,
   github: GitHubPort,
-): { readonly subLinks: ReadonlyArray<SubIssueLink>; readonly tasks: ReadonlyArray<TE.TaskEither<DomainError, void>> } =>
+) =>
   pipe(
     parentId,
-    O.chain((id) => O.fromNullable(idToNumber.get(id))),
+    O.chain(flow((id: string) => idToNumber.get(id), O.fromNullable)),
     O.match(
-      () => ({ subLinks: [], tasks: [] }),
+      () => ({ subLinks: [] as ReadonlyArray<SubIssueLink>, tasks: [] as ReadonlyArray<TE.TaskEither<DomainError, void>> }),
       (parentNum) => ({
-        subLinks: [{ parent: isoIssueNumber.wrap(parentNum), child: isoIssueNumber.wrap(childNum) }],
-        tasks: [github.addSubIssue(parentNum, childNum)],
+        subLinks: [{ parent: isoIssueNumber.wrap(parentNum), child: isoIssueNumber.wrap(childNum) }] as ReadonlyArray<SubIssueLink>,
+        tasks: [github.addSubIssue(parentNum, childNum)] as ReadonlyArray<TE.TaskEither<DomainError, void>>,
       }),
     ),
   );
@@ -150,7 +144,7 @@ const collectDepLinks = (
   blockedBy: ReadonlyArray<string>,
   idToNumber: ReadonlyMap<string, number>,
   github: GitHubPort,
-): { readonly depLinks: ReadonlyArray<DependencyLink>; readonly tasks: ReadonlyArray<TE.TaskEither<DomainError, void>> } =>
+) =>
   pipe(
     blockedBy,
     RA.filterMap((depId) =>
@@ -162,36 +156,48 @@ const collectDepLinks = (
     }),
   );
 
-const mergeNodeLinks = (
-  parent: { readonly subLinks: ReadonlyArray<SubIssueLink>; readonly tasks: ReadonlyArray<TE.TaskEither<DomainError, void>> },
-  deps: { readonly depLinks: ReadonlyArray<DependencyLink>; readonly tasks: ReadonlyArray<TE.TaskEither<DomainError, void>> },
-): NodeLinks => ({
-  subLinks: parent.subLinks,
-  depLinks: deps.depLinks,
-  tasks: [...parent.tasks, ...deps.tasks],
-});
+const buildNodeLinks = (
+  childNum: number,
+  node: PlanIssueNode,
+  epic: PlanManifest['epic'],
+  idToNumber: ReadonlyMap<string, number>,
+  github: GitHubPort,
+) => {
+  const parent = collectParentLink(
+    childNum,
+    pipe(O.fromNullable(node.parentId), O.alt(() => O.fromNullable(epic?.id))),
+    idToNumber,
+    github,
+  );
+  const deps = collectDepLinks(childNum, node.blockedBy, idToNumber, github);
+  return {
+    subLinks: parent.subLinks,
+    depLinks: deps.depLinks,
+    tasks: [...parent.tasks, ...deps.tasks],
+  };
+};
 
 const collectLinksForNode = (
   node: PlanIssueNode,
-  epicId: O.Option<string>,
+  epic: PlanManifest['epic'],
   idToNumber: ReadonlyMap<string, number>,
   github: GitHubPort,
-): NodeLinks =>
+) =>
   pipe(
     O.fromNullable(idToNumber.get(node.id)),
     O.match(
-      (): NodeLinks => ({ subLinks: [], depLinks: [], tasks: [] }),
-      (childNum): NodeLinks =>
-        mergeNodeLinks(
-          collectParentLink(childNum, pipe(O.fromNullable(node.parentId), O.alt(() => epicId)), idToNumber, github),
-          collectDepLinks(childNum, node.blockedBy, idToNumber, github),
-        ),
+      () => ({
+        subLinks: [] as ReadonlyArray<SubIssueLink>,
+        depLinks: [] as ReadonlyArray<DependencyLink>,
+        tasks: [] as ReadonlyArray<TE.TaskEither<DomainError, void>>,
+      }),
+      (childNum) => buildNodeLinks(childNum, node, epic, idToNumber, github),
     ),
   );
 
 const runSequentialTasks = (
   tasks: ReadonlyArray<TE.TaskEither<DomainError, void>>,
-): TE.TaskEither<DomainError, void> =>
+) =>
   pipe(
     tasks,
     RA.reduce(TE.right(undefined) as TE.TaskEither<DomainError, void>, (acc, task) =>
@@ -204,13 +210,13 @@ const runSequentialTasks = (
 
 const linkAllNodes = (
   sorted: ReadonlyArray<PlanIssueNode>,
-  epicId: O.Option<string>,
+  epic: PlanManifest['epic'],
   idToNumber: ReadonlyMap<string, number>,
   github: GitHubPort,
-): TE.TaskEither<DomainError, MaterializedPlanResult> =>
+) =>
   pipe(
     sorted,
-    RA.map((node) => collectLinksForNode(node, epicId, idToNumber, github)),
+    RA.map((node) => collectLinksForNode(node, epic, idToNumber, github)),
     (collected) =>
       pipe(
         runSequentialTasks(pipe(collected, RA.chain((c) => c.tasks))),
@@ -225,19 +231,19 @@ const linkAllNodes = (
 const materializeValidPlan = (
   validManifest: PlanManifest,
   github: GitHubPort,
-): TE.TaskEither<DomainError, MaterializedPlanResult> =>
-  pipe(
+) => {
+  const sorted = topoSortPlan(validManifest);
+  return pipe(
     createEpicIfPresent(validManifest.epic, github),
-    TE.chain((epicMap) => createAllNodes(topoSortPlan(validManifest), epicMap, github)),
-    TE.chain((idToNumber) =>
-      linkAllNodes(topoSortPlan(validManifest), O.fromNullable(validManifest.epic?.id), idToNumber, github),
-    ),
+    TE.chain((epicMap) => createAllNodes(sorted, epicMap, github)),
+    TE.chain((idToNumber) => linkAllNodes(sorted, validManifest.epic, idToNumber, github)),
   );
+};
 
 export function materializePlan(
   manifest: PlanManifest,
   github: GitHubPort,
-): TE.TaskEither<DomainError, MaterializedPlanResult> {
+) {
   return pipe(
     TE.fromEither(validatePlanDag(manifest)),
     TE.chain((validManifest) => materializeValidPlan(validManifest, github)),

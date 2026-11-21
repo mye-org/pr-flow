@@ -3048,7 +3048,7 @@ var require_function = __commonJS({
     exports2.identity = identity2;
     exports2.constant = constant3;
     exports2.flip = flip;
-    exports2.flow = flow2;
+    exports2.flow = flow4;
     exports2.tuple = tuple2;
     exports2.increment = increment;
     exports2.decrement = decrement;
@@ -3184,7 +3184,7 @@ var require_function = __commonJS({
         };
       };
     }
-    function flow2(ab, bc, cd, de, ef, fg, gh, hi, ij) {
+    function flow4(ab, bc, cd, de, ef, fg, gh, hi, ij) {
       switch (arguments.length) {
         case 1:
           return ab;
@@ -3295,7 +3295,7 @@ var require_function = __commonJS({
     var getEndomorphismMonoid = function() {
       return {
         concat: function(first2, second) {
-          return flow2(first2, second);
+          return flow4(first2, second);
         },
         empty: identity2
       };
@@ -4507,12 +4507,12 @@ var require_Either = __commonJS({
     exports2.foldW = exports2.matchW;
     exports2.match = exports2.matchW;
     exports2.fold = exports2.match;
-    var getOrElseW2 = function(onLeft) {
+    var getOrElseW3 = function(onLeft) {
       return function(ma) {
         return (0, exports2.isLeft)(ma) ? onLeft(ma.left) : ma.right;
       };
     };
-    exports2.getOrElseW = getOrElseW2;
+    exports2.getOrElseW = getOrElseW3;
     exports2.getOrElse = exports2.getOrElseW;
     exports2.flap = (0, Functor_1.flap)(exports2.Functor);
     exports2.apFirst = (0, Apply_1.apFirst)(exports2.Apply);
@@ -5693,12 +5693,12 @@ var require_Option = __commonJS({
     exports2.foldW = exports2.matchW;
     exports2.match = exports2.matchW;
     exports2.fold = exports2.match;
-    var getOrElseW2 = function(onNone) {
+    var getOrElseW3 = function(onNone) {
       return function(ma) {
         return (0, exports2.isNone)(ma) ? onNone() : ma.value;
       };
     };
-    exports2.getOrElseW = getOrElseW2;
+    exports2.getOrElseW = getOrElseW3;
     exports2.getOrElse = exports2.getOrElseW;
     exports2.flap = (0, Functor_1.flap)(exports2.Functor);
     exports2.apFirst = (0, Apply_1.apFirst)(exports2.Apply);
@@ -5961,7 +5961,7 @@ var require_EitherT = __commonJS({
     exports2.altValidation = altValidation;
     exports2.match = match5;
     exports2.matchE = matchE;
-    exports2.getOrElse = getOrElse3;
+    exports2.getOrElse = getOrElse2;
     exports2.orElse = orElse2;
     exports2.orElseFirst = orElseFirst;
     exports2.tapError = tapError;
@@ -6094,7 +6094,7 @@ var require_EitherT = __commonJS({
         };
       };
     }
-    function getOrElse3(M2) {
+    function getOrElse2(M2) {
       return function(onLeft) {
         return function(ma) {
           return M2.chain(ma, E8.match(onLeft, M2.of));
@@ -6157,7 +6157,7 @@ var require_EitherT = __commonJS({
       var _bimap = bimap(M2);
       var _mapLeft = mapLeft(M2);
       var _fold = matchE(M2);
-      var _getOrElse = getOrElse3(M2);
+      var _getOrElse = getOrElse2(M2);
       var _orElse = orElse2(M2);
       return {
         map: function(fa, f) {
@@ -11129,8 +11129,8 @@ ${ctx.indent}`;
         const vs0 = valueStr[0];
         const nl0 = valueStr.indexOf("\n");
         const hasNewline = nl0 !== -1;
-        const flow2 = ctx.inFlow ?? value.flow ?? value.items.length === 0;
-        if (hasNewline || !flow2) {
+        const flow4 = ctx.inFlow ?? value.flow ?? value.items.length === 0;
+        if (hasNewline || !flow4) {
           let hasPropsLine = false;
           if (hasNewline && (vs0 === "&" || vs0 === "!")) {
             let sp0 = valueStr.indexOf(" ");
@@ -11356,8 +11356,8 @@ var require_stringifyCollection = __commonJS({
     var stringify = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyCollection(collection, ctx, options) {
-      const flow2 = ctx.inFlow ?? collection.flow;
-      const stringify2 = flow2 ? stringifyFlowCollection : stringifyBlockCollection;
+      const flow4 = ctx.inFlow ?? collection.flow;
+      const stringify2 = flow4 ? stringifyFlowCollection : stringifyBlockCollection;
       return stringify2(collection, ctx, options);
     }
     function stringifyBlockCollection({ comment, items }, ctx, { blockItemPrefix, flowChars, itemIndent, onChompKeep, onComment }) {
@@ -13000,7 +13000,7 @@ var require_Document = __commonJS({
           options = replacer;
           replacer = void 0;
         }
-        const { aliasDuplicateObjects, anchorPrefix, flow: flow2, keepUndefined, onTagObj, tag } = options ?? {};
+        const { aliasDuplicateObjects, anchorPrefix, flow: flow4, keepUndefined, onTagObj, tag } = options ?? {};
         const { onAnchor, setAnchors, sourceObjects } = anchors.createNodeAnchors(
           this,
           // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
@@ -13016,7 +13016,7 @@ var require_Document = __commonJS({
           sourceObjects
         };
         const node = createNode.createNode(value, tag, ctx);
-        if (flow2 && identity2.isCollection(node))
+        if (flow4 && identity2.isCollection(node))
           node.flow = true;
         setAnchors();
         return node;
@@ -13264,7 +13264,7 @@ ${pointer}
 var require_resolve_props = __commonJS({
   "node_modules/yaml/dist/compose/resolve-props.js"(exports2) {
     "use strict";
-    function resolveProps(tokens, { flow: flow2, indicator, next, offset, onError, parentIndent, startOnNewline }) {
+    function resolveProps(tokens, { flow: flow4, indicator, next, offset, onError, parentIndent, startOnNewline }) {
       let spaceBefore = false;
       let atNewline = startOnNewline;
       let hasSpace = startOnNewline;
@@ -13293,7 +13293,7 @@ var require_resolve_props = __commonJS({
         }
         switch (token.type) {
           case "space":
-            if (!flow2 && (indicator !== "doc-start" || next?.type !== "flow-collection") && token.source.includes("	")) {
+            if (!flow4 && (indicator !== "doc-start" || next?.type !== "flow-collection") && token.source.includes("	")) {
               tab = token;
             }
             hasSpace = true;
@@ -13349,15 +13349,15 @@ var require_resolve_props = __commonJS({
             if (anchor || tag)
               onError(token, "BAD_PROP_ORDER", `Anchors and tags must be after the ${token.source} indicator`);
             if (found)
-              onError(token, "UNEXPECTED_TOKEN", `Unexpected ${token.source} in ${flow2 ?? "collection"}`);
+              onError(token, "UNEXPECTED_TOKEN", `Unexpected ${token.source} in ${flow4 ?? "collection"}`);
             found = token;
             atNewline = indicator === "seq-item-ind" || indicator === "explicit-key-ind";
             hasSpace = false;
             break;
           case "comma":
-            if (flow2) {
+            if (flow4) {
               if (comma)
-                onError(token, "UNEXPECTED_TOKEN", `Unexpected , in ${flow2}`);
+                onError(token, "UNEXPECTED_TOKEN", `Unexpected , in ${flow4}`);
               comma = token;
               atNewline = false;
               hasSpace = false;
@@ -23338,14 +23338,14 @@ function extractStatusFromFieldValue(value) {
   return (0, import_function14.pipe)(
     value,
     O2.chain((v2) => O2.fromNullable(FIELD_VALUE_TO_STATUS[v2])),
-    O2.getOrElse(() => "backlog")
+    O2.getOrElseW(() => "backlog")
   );
 }
 function extractTypeFromLabels(labels) {
   return (0, import_function14.pipe)(
     labels,
     RA.findFirstMap((label) => O2.fromNullable(LABEL_TO_TYPE[isoLabelName.unwrap(label)])),
-    O2.getOrElse(() => "task")
+    O2.getOrElseW(() => "task")
   );
 }
 var ResolvedCommentSchema = external_exports.object({
@@ -27521,7 +27521,7 @@ var OctokitGitHubAdapter = class {
           `Failed to ensure "${this.statusFieldName}" issue field in org "${this.owner}"`,
           err
         );
-        if (baseErr.type === "GITHUB_API_ERROR" && O4.isSome(baseErr.status) && isoCount.unwrap(baseErr.status.value) === 403) {
+        if (O4.isSome(baseErr.status) && isoCount.unwrap(baseErr.status.value) === 403) {
           const optionNames = PR_FLOW_STATUS_OPTIONS.map(
             (o2) => isoFieldOptionName.unwrap(o2.name)
           ).join(", ");
@@ -27532,7 +27532,7 @@ var OctokitGitHubAdapter = class {
             )
           };
         }
-        if (baseErr.type === "GITHUB_API_ERROR" && O4.isSome(baseErr.status) && isoCount.unwrap(baseErr.status.value) === 404) {
+        if (O4.isSome(baseErr.status) && isoCount.unwrap(baseErr.status.value) === 404) {
           return {
             ...baseErr,
             message: isoMessage.wrap(
@@ -28590,17 +28590,20 @@ var validatePlanSchema = (parsed) => M(parsed).with({ success: true }, ({ data }
     )
   })
 ).exhaustive();
+var parsePlanYaml = (0, import_function18.flow)(
+  (s2) => (0, import_yaml2.parse)(s2),
+  (raw) => PlanManifestSchema.safeParse(raw)
+);
+var formatPlanYamlError = (errMessage) => ({
+  type: "PLAN_VALIDATION_ERROR",
+  message: isoMessage.wrap(`Failed to parse plan manifest YAML: ${errMessage}`),
+  details: O5.none
+});
 function parsePlanManifest(yamlContent) {
   return (0, import_function18.pipe)(
     E3.tryCatch(
-      () => PlanManifestSchema.safeParse((0, import_yaml2.parse)(yamlContent)),
-      (err) => ({
-        type: "PLAN_VALIDATION_ERROR",
-        message: isoMessage.wrap(
-          `Failed to parse plan manifest YAML: ${err instanceof Error ? err.message : String(err)}`
-        ),
-        details: O5.none
-      })
+      () => parsePlanYaml(yamlContent),
+      (err) => formatPlanYamlError(err instanceof Error ? err.message : String(err))
     ),
     E3.chain(validatePlanSchema)
   );
@@ -32277,23 +32280,21 @@ var decrementNeighbors = (neighbors, inDegree) => (0, import_function21.pipe)(
     };
   })
 );
-var stepWithNode = (current, restQueue, inDegree, graph, acc) => {
+var stepWithNode = (current, queue, inDegree, graph, acc) => {
   const node = graph.byId.get(current);
   const { inDegree: nextInDegree, newlyReady } = decrementNeighbors(
     graph.adj.get(current) ?? [],
     inDegree
   );
-  return kahnStep([...restQueue, ...newlyReady], nextInDegree, graph, node ? [...acc, node] : acc);
+  return kahnStep([...queue.slice(1), ...newlyReady], nextInDegree, graph, node ? [...acc, node] : acc);
 };
-function kahnStep(queue, inDegree, graph, acc) {
-  return (0, import_function21.pipe)(
-    RA6.head(queue),
-    O7.match(
-      () => acc,
-      (current) => stepWithNode(current, queue.slice(1), inDegree, graph, acc)
-    )
-  );
-}
+var kahnStep = (queue, inDegree, graph, acc) => (0, import_function21.pipe)(
+  RA6.head(queue),
+  O7.match(
+    () => acc,
+    (current) => stepWithNode(current, queue, inDegree, graph, acc)
+  )
+);
 function topoSortPlan(manifest) {
   return (0, import_function21.pipe)(
     buildGraph(manifest),
@@ -32314,18 +32315,22 @@ var E5 = __toESM(require_Either(), 1);
 var import_function22 = __toESM(require_function(), 1);
 var O8 = __toESM(require_Option(), 1);
 var RA7 = __toESM(require_ReadonlyArray(), 1);
+var initDupAcc = (epicId) => ({
+  allIds: (0, import_function22.pipe)(
+    epicId,
+    O8.match(
+      () => /* @__PURE__ */ new Set(),
+      (id6) => /* @__PURE__ */ new Set([id6])
+    )
+  ),
+  errors: []
+});
 var collectDuplicateErrors = (issues, epicId) => (0, import_function22.pipe)(
   issues,
-  RA7.reduce(
-    {
-      allIds: O8.isSome(epicId) ? /* @__PURE__ */ new Set([epicId.value]) : /* @__PURE__ */ new Set(),
-      errors: []
-    },
-    (acc, issue) => ({
-      allIds: /* @__PURE__ */ new Set([...acc.allIds, issue.id]),
-      errors: acc.allIds.has(issue.id) ? [...acc.errors, `Duplicate issue id '${issue.id}'`] : acc.errors
-    })
-  )
+  RA7.reduce(initDupAcc(epicId), (acc, issue) => ({
+    allIds: /* @__PURE__ */ new Set([...acc.allIds, issue.id]),
+    errors: acc.allIds.has(issue.id) ? [...acc.errors, `Duplicate issue id '${issue.id}'`] : acc.errors
+  }))
 );
 var collectRefErrorsForIssue = (issue, allIds) => [
   ...issue.parentId && !allIds.has(issue.parentId) ? [`Issue '${issue.id}' references unknown parentId '${issue.parentId}'`] : [],
@@ -32354,18 +32359,24 @@ var dfsNeighbors = (neighbors, path4, visiting, visited, adj) => (0, import_func
   neighbors,
   RA7.reduce(
     { visited, cycle: O8.none },
-    (acc, next) => O8.isSome(acc.cycle) ? acc : dfsNode(next, path4, visiting, acc.visited, adj)
+    (acc, next) => (0, import_function22.pipe)(
+      acc.cycle,
+      O8.match(
+        () => dfsNode(next, path4, visiting, acc.visited, adj),
+        () => acc
+      )
+    )
   )
 );
 var exploreNode = (nodeId, path4, visiting, visited, adj) => (0, import_function22.pipe)(
   dfsNeighbors(adj.get(nodeId) ?? [], [...path4, nodeId], /* @__PURE__ */ new Set([...visiting, nodeId]), visited, adj),
   (res) => ({ visited: /* @__PURE__ */ new Set([...res.visited, nodeId]), cycle: res.cycle })
 );
-function dfsNode(nodeId, path4, visiting, visited, adj) {
+var dfsNode = (nodeId, path4, visiting, visited, adj) => {
   if (visiting.has(nodeId)) return { visited, cycle: O8.some([...path4, nodeId]) };
   if (visited.has(nodeId)) return { visited, cycle: O8.none };
   return exploreNode(nodeId, path4, visiting, visited, adj);
-}
+};
 var findCycle = (allIds, adj) => (0, import_function22.pipe)(
   Array.from(allIds),
   RA7.reduce(
@@ -32467,7 +32478,7 @@ var createAllNodes = (sorted, initialMap, github) => (0, import_function23.pipe)
 );
 var collectParentLink = (childNum, parentId, idToNumber, github) => (0, import_function23.pipe)(
   parentId,
-  O9.chain((id6) => O9.fromNullable(idToNumber.get(id6))),
+  O9.chain((0, import_function23.flow)((id6) => idToNumber.get(id6), O9.fromNullable)),
   O9.match(
     () => ({ subLinks: [], tasks: [] }),
     (parentNum) => ({
@@ -32490,19 +32501,29 @@ var collectDepLinks = (childNum, blockedBy, idToNumber, github) => (0, import_fu
     tasks: (0, import_function23.pipe)(pairs, RA8.map((p2) => p2.task))
   })
 );
-var mergeNodeLinks = (parent, deps) => ({
-  subLinks: parent.subLinks,
-  depLinks: deps.depLinks,
-  tasks: [...parent.tasks, ...deps.tasks]
-});
-var collectLinksForNode = (node, epicId, idToNumber, github) => (0, import_function23.pipe)(
+var buildNodeLinks = (childNum, node, epic, idToNumber, github) => {
+  const parent = collectParentLink(
+    childNum,
+    (0, import_function23.pipe)(O9.fromNullable(node.parentId), O9.alt(() => O9.fromNullable(epic?.id))),
+    idToNumber,
+    github
+  );
+  const deps = collectDepLinks(childNum, node.blockedBy, idToNumber, github);
+  return {
+    subLinks: parent.subLinks,
+    depLinks: deps.depLinks,
+    tasks: [...parent.tasks, ...deps.tasks]
+  };
+};
+var collectLinksForNode = (node, epic, idToNumber, github) => (0, import_function23.pipe)(
   O9.fromNullable(idToNumber.get(node.id)),
   O9.match(
-    () => ({ subLinks: [], depLinks: [], tasks: [] }),
-    (childNum) => mergeNodeLinks(
-      collectParentLink(childNum, (0, import_function23.pipe)(O9.fromNullable(node.parentId), O9.alt(() => epicId)), idToNumber, github),
-      collectDepLinks(childNum, node.blockedBy, idToNumber, github)
-    )
+    () => ({
+      subLinks: [],
+      depLinks: [],
+      tasks: []
+    }),
+    (childNum) => buildNodeLinks(childNum, node, epic, idToNumber, github)
   )
 );
 var runSequentialTasks = (tasks) => (0, import_function23.pipe)(
@@ -32515,9 +32536,9 @@ var runSequentialTasks = (tasks) => (0, import_function23.pipe)(
     )
   )
 );
-var linkAllNodes = (sorted, epicId, idToNumber, github) => (0, import_function23.pipe)(
+var linkAllNodes = (sorted, epic, idToNumber, github) => (0, import_function23.pipe)(
   sorted,
-  RA8.map((node) => collectLinksForNode(node, epicId, idToNumber, github)),
+  RA8.map((node) => collectLinksForNode(node, epic, idToNumber, github)),
   (collected) => (0, import_function23.pipe)(
     runSequentialTasks((0, import_function23.pipe)(collected, RA8.chain((c2) => c2.tasks))),
     TE3.map(() => ({
@@ -32527,13 +32548,14 @@ var linkAllNodes = (sorted, epicId, idToNumber, github) => (0, import_function23
     }))
   )
 );
-var materializeValidPlan = (validManifest, github) => (0, import_function23.pipe)(
-  createEpicIfPresent(validManifest.epic, github),
-  TE3.chain((epicMap) => createAllNodes(topoSortPlan(validManifest), epicMap, github)),
-  TE3.chain(
-    (idToNumber) => linkAllNodes(topoSortPlan(validManifest), O9.fromNullable(validManifest.epic?.id), idToNumber, github)
-  )
-);
+var materializeValidPlan = (validManifest, github) => {
+  const sorted = topoSortPlan(validManifest);
+  return (0, import_function23.pipe)(
+    createEpicIfPresent(validManifest.epic, github),
+    TE3.chain((epicMap) => createAllNodes(sorted, epicMap, github)),
+    TE3.chain((idToNumber) => linkAllNodes(sorted, validManifest.epic, idToNumber, github))
+  );
+};
 function materializePlan(manifest, github) {
   return (0, import_function23.pipe)(
     TE3.fromEither(validatePlanDag(manifest)),
@@ -32559,17 +32581,21 @@ function computeContainerStatus(children) {
     )
   ).exhaustive();
 }
-var buildStatusEffects = (parent, targetStatus) => M(targetStatus !== parent.status).with(true, () => [
-  {
-    type: "SET_STATUS_FIELD",
-    issueNumber: parent.number,
-    from: O10.some(parent.status),
-    to: targetStatus
-  }
-]).with(false, () => []).exhaustive();
-var buildLifecycleEffects = (parent, targetStatus) => M([targetStatus, parent.state]).with(["fixed", "open"], () => [
-  { type: "CLOSE_ISSUE", issueNumber: parent.number }
-]).with(
+var buildStatusEffects = (parent, targetStatus) => M(targetStatus !== parent.status).with(
+  true,
+  () => [
+    {
+      type: "SET_STATUS_FIELD",
+      issueNumber: parent.number,
+      from: O10.some(parent.status),
+      to: targetStatus
+    }
+  ]
+).with(false, () => []).exhaustive();
+var buildLifecycleEffects = (parent, targetStatus) => M([targetStatus, parent.state]).with(
+  ["fixed", "open"],
+  () => [{ type: "CLOSE_ISSUE", issueNumber: parent.number }]
+).with(
   ["backlog", "closed"],
   ["blocked_dep", "closed"],
   ["ready", "closed"],
@@ -32954,31 +32980,31 @@ function formatDomainError(err) {
 }
 function fail(err) {
   console.error(formatDomainError(err));
-  process.exit(1);
+  return process.exit(1);
 }
 function loadConfigFromDisk(configPath = "pr-flow.config.yml") {
   const abs = path3.resolve(configPath);
   if (!fs3.existsSync(abs)) {
-    fail({ type: "CONFIG_ERROR", message: isoMessage.wrap(`File not found: ${abs}`) });
+    return fail({ type: "CONFIG_ERROR", message: isoMessage.wrap(`File not found: ${abs}`) });
   }
   const content = fs3.readFileSync(abs, "utf-8");
   const parsed = parseConfig(content);
   if (E7.isLeft(parsed)) {
-    fail(parsed.left);
+    return fail(parsed.left);
   }
   return parsed.right;
 }
 function createGitHubFromEnv(repoFlag, statusFieldName) {
   const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
   if (!token) {
-    fail({
+    return fail({
       type: "CONFIG_ERROR",
       message: isoMessage.wrap("GITHUB_TOKEN (or GH_TOKEN) environment variable is required.")
     });
   }
   const repoSlug = repoFlag || process.env.GITHUB_REPOSITORY;
   if (!repoSlug || !repoSlug.includes("/")) {
-    fail({
+    return fail({
       type: "CONFIG_ERROR",
       message: isoMessage.wrap("Repository must be specified via --repo owner/name or GITHUB_REPOSITORY.")
     });
@@ -32989,7 +33015,7 @@ function createGitHubFromEnv(repoFlag, statusFieldName) {
 async function runOrExit(task) {
   const res = await task();
   if (E7.isLeft(res)) {
-    fail(res.left);
+    return fail(res.left);
   }
   return res.right;
 }
@@ -33098,7 +33124,7 @@ statusCmd.command("set").description("Set the pr-flow-status Issue Field on a Gi
     const rawStatus = opts.status.trim();
     const resolvedStatus = FIELD_VALUE_TO_STATUS[rawStatus] ?? (Object.prototype.hasOwnProperty.call(STATUS_TO_FIELD_VALUE, rawStatus) ? rawStatus : void 0);
     if (!resolvedStatus) {
-      fail({
+      return fail({
         type: "CONFIG_ERROR",
         message: isoMessage.wrap(
           `Invalid status "${rawStatus}". Expected one of: ${Object.values(STATUS_TO_FIELD_VALUE).join(", ")}.`
@@ -33107,7 +33133,7 @@ statusCmd.command("set").description("Set the pr-flow-status Issue Field on a Gi
     }
     const issueNumber = Number(opts.issue);
     if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
-      fail({
+      return fail({
         type: "CONFIG_ERROR",
         message: isoMessage.wrap(`Invalid issue number "${opts.issue}".`)
       });
@@ -33128,13 +33154,13 @@ var planCmd = program2.command("plan").description("Validate and materialize pla
 planCmd.command("validate").description("Validate a plan-manifest.yml schema and dependency DAG").requiredOption("--file <path>", "Path to plan-manifest.yml").action((opts) => {
   const content = fs3.readFileSync(path3.resolve(opts.file), "utf-8");
   const res = (0, import_function25.pipe)(parsePlanManifest(content), E7.chain(validatePlanDag));
-  if (E7.isLeft(res)) fail(res.left);
+  if (E7.isLeft(res)) return fail(res.left);
   console.log(`Plan manifest valid (${String(res.right.issues.length)} issues).`);
 });
 planCmd.command("materialize").description("Create GitHub issues, sub-issue links, and blocked_by dependencies from a plan manifest").requiredOption("--file <path>", "Path to plan-manifest.yml").option("--repo <owner/repo>", "GitHub repository (defaults to GITHUB_REPOSITORY)").action(async (opts) => {
   const content = fs3.readFileSync(path3.resolve(opts.file), "utf-8");
   const parsed = (0, import_function25.pipe)(parsePlanManifest(content), E7.chain(validatePlanDag));
-  if (E7.isLeft(parsed)) fail(parsed.left);
+  if (E7.isLeft(parsed)) return fail(parsed.left);
   const github = createGitHubFromEnv(opts.repo);
   const result = await runOrExit(materializePlan(parsed.right, github));
   console.log(JSON.stringify(result, null, 2));
@@ -33301,7 +33327,7 @@ program2.command("finalize").description("Apply changes.patch, push ai/issue-<N>
     const rawResult = JSON.parse(fs3.readFileSync(path3.resolve(opts.result), "utf-8"));
     const parsedResult = AgentResultSchema.safeParse(rawResult);
     if (!parsedResult.success) {
-      fail({ type: "CONFIG_ERROR", message: isoMessage.wrap("Invalid result.json format") });
+      return fail({ type: "CONFIG_ERROR", message: isoMessage.wrap("Invalid result.json format") });
     }
     const agentResult = parsedResult.data;
     const issue = await runOrExit(github.getIssue(issueNumber));

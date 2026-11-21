@@ -18,22 +18,22 @@ export type IssueMachineContext = {
   readonly effects: ReadonlyArray<Effect>;
 };
 
-function appendEffect(effects: ReadonlyArray<Effect>, next: Effect): ReadonlyArray<Effect> {
+function appendEffect(effects: ReadonlyArray<Effect>, next: Effect) {
   return [...effects, next];
 }
 
 const hasPickupCapacity = (
   e: Extract<IssueEvent, { readonly type: 'PICKUP_REQUESTED' }>,
-): boolean =>
+) =>
   e.leafKind === 'leaf' &&
   e.blockerState === 'all_closed' &&
   isoCount.unwrap(e.openPrCount) === 0 &&
   isoCount.unwrap(e.wipCount) < isoCount.unwrap(e.wipLimit);
 
-const canPickupEvent = (event: IssueEvent): boolean =>
+const canPickupEvent = (event: IssueEvent) =>
   event.type === 'PICKUP_REQUESTED' ? hasPickupCapacity(event) : false;
 
-const canRetryEvent = (event: IssueEvent): boolean =>
+const canRetryEvent = (event: IssueEvent) =>
   event.type === 'TRANSIENT_EXECUTION_FAILED'
     ? isoCount.unwrap(event.retryCount) < isoCount.unwrap(event.maxRetries)
     : false;
@@ -310,7 +310,7 @@ export type TransitionResult = {
 const toTransitionResult = (
   previousStatus: IssueStatus,
   nextSnapshot: { readonly value: IssueStatus; readonly context: IssueMachineContext },
-): TransitionResult => ({
+) => ({
   previousStatus,
   nextStatus: nextSnapshot.value,
   changeKind: nextSnapshot.value !== previousStatus ? 'changed' : 'unchanged',
@@ -320,7 +320,7 @@ const toTransitionResult = (
 export function transitionIssue(
   issue: Pick<IssueNode, 'number' | 'status'>,
   event: IssueEvent,
-): TransitionResult {
+) {
   return toTransitionResult(
     issue.status,
     transition(

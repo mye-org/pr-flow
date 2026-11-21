@@ -18,7 +18,7 @@ export type InitResult = {
   readonly skipped: ReadonlyArray<string>;
 };
 
-function writeIfAllowed(filePath: string, content: string, force: boolean, result: InitResult): InitResult {
+function writeIfAllowed(filePath: string, content: string, force: boolean, result: InitResult) {
   if (fs.existsSync(filePath) && !force) {
     return { written: result.written, skipped: [...result.skipped, filePath] };
   }
@@ -27,7 +27,7 @@ function writeIfAllowed(filePath: string, content: string, force: boolean, resul
   return { written: [...result.written, filePath], skipped: result.skipped };
 }
 
-export function generateInitFiles(opts: InitOptions): InitResult {
+export function generateInitFiles(opts: InitOptions) {
   let result: InitResult = { written: [], skipped: [] };
   const usesPrefix = `${opts.prFlowOwner}/pr-flow/.github/workflows`;
 

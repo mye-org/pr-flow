@@ -9,8 +9,8 @@ import * as TE from 'fp-ts/lib/TaskEither';
 import { buildImplementPrompt, buildReviewPrompt } from '../adapters/agent/prompts.js';
 import { runAgentExecution } from '../adapters/agent/runner.js';
 import { OctokitGitHubAdapter } from '../adapters/github/client.js';
-import type { GitHubPort, PrReviewThread } from '../adapters/github/types.js';
-import { parseConfig, type PrFlowConfig } from '../domain/config.js';
+import type { PrReviewThread } from '../adapters/github/types.js';
+import { parseConfig } from '../domain/config.js';
 import { formatGuardError, type DomainError } from '../domain/errors.js';
 import {
   AgentResultSchema,
@@ -44,7 +44,7 @@ import { computeRollupEffects } from '../rollup/computeRollup.js';
 import { generateInitFiles } from './init.js';
 import { replyAndResolveReviewThreads } from './reviewFollowUp.js';
 
-function formatDomainError(err: DomainError): string {
+function formatDomainError(err: DomainError) {
   switch (err.type) {
     case 'CONFIG_ERROR':
       return `Configuration error: ${isoMessage.unwrap(err.message)}`;
@@ -65,35 +65,35 @@ function formatDomainError(err: DomainError): string {
   }
 }
 
-function fail(err: DomainError): never {
+function fail(err: DomainError) {
   console.error(formatDomainError(err));
-  process.exit(1);
+  return process.exit(1);
 }
 
-function loadConfigFromDisk(configPath = 'pr-flow.config.yml'): PrFlowConfig {
+function loadConfigFromDisk(configPath = 'pr-flow.config.yml') {
   const abs = path.resolve(configPath);
   if (!fs.existsSync(abs)) {
-    fail({ type: 'CONFIG_ERROR', message: isoMessage.wrap(`File not found: ${abs}`) });
+    return fail({ type: 'CONFIG_ERROR', message: isoMessage.wrap(`File not found: ${abs}`) });
   }
   const content = fs.readFileSync(abs, 'utf-8');
   const parsed = parseConfig(content);
   if (E.isLeft(parsed)) {
-    fail(parsed.left);
+    return fail(parsed.left);
   }
   return parsed.right;
 }
 
-function createGitHubFromEnv(repoFlag?: string, statusFieldName?: string): GitHubPort {
+function createGitHubFromEnv(repoFlag?: string, statusFieldName?: string) {
   const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
   if (!token) {
-    fail({
+    return fail({
       type: 'CONFIG_ERROR',
       message: isoMessage.wrap('GITHUB_TOKEN (or GH_TOKEN) environment variable is required.'),
     });
   }
   const repoSlug = repoFlag || process.env.GITHUB_REPOSITORY;
   if (!repoSlug || !repoSlug.includes('/')) {
-    fail({
+    return fail({
       type: 'CONFIG_ERROR',
       message: isoMessage.wrap('Repository must be specified via --repo owner/name or GITHUB_REPOSITORY.'),
     });
@@ -102,15 +102,15 @@ function createGitHubFromEnv(repoFlag?: string, statusFieldName?: string): GitHu
   return new OctokitGitHubAdapter({ token, owner, repo, statusFieldName });
 }
 
-async function runOrExit<T>(task: TE.TaskEither<DomainError, T>): Promise<T> {
+async function runOrExit<T>(task: TE.TaskEither<DomainError, T>) {
   const res = await task();
   if (E.isLeft(res)) {
-    fail(res.left);
+    return fail(res.left);
   }
   return res.right;
 }
 
-function runGit(cmd: string, cwd: string): string {
+function runGit(cmd: string, cwd: string) {
   return execSync(`git ${cmd}`, { cwd, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
@@ -128,7 +128,7 @@ function printPreflightReport(
     readonly message: string;
     readonly remediation?: string;
   }>,
-): boolean {
+) {
   console.log('\npr-flow Preflight Checks:');
   let hasFailures = false;
   for (const check of checks) {
@@ -309,7 +309,7 @@ statusCmd
           : undefined);
 
       if (!resolvedStatus) {
-        fail({
+        return fail({
           type: 'CONFIG_ERROR',
           message: isoMessage.wrap(
             `Invalid status "${rawStatus}". Expected one of: ${Object.values(STATUS_TO_FIELD_VALUE).join(', ')}.`,
@@ -319,7 +319,7 @@ statusCmd
 
       const issueNumber = Number(opts.issue);
       if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
-        fail({
+        return fail({
           type: 'CONFIG_ERROR',
           message: isoMessage.wrap(`Invalid issue number "${opts.issue}".`),
         });
@@ -347,7 +347,7 @@ planCmd
   .action((opts: { readonly file: string }) => {
     const content = fs.readFileSync(path.resolve(opts.file), 'utf-8');
     const res = pipe(parsePlanManifest(content), E.chain(validatePlanDag));
-    if (E.isLeft(res)) fail(res.left);
+    if (E.isLeft(res)) return fail(res.left);
     console.log(`Plan manifest valid (${String(res.right.issues.length)} issues).`);
   });
 
@@ -359,7 +359,7 @@ planCmd
   .action(async (opts: { readonly file: string; readonly repo?: string }) => {
     const content = fs.readFileSync(path.resolve(opts.file), 'utf-8');
     const parsed = pipe(parsePlanManifest(content), E.chain(validatePlanDag));
-    if (E.isLeft(parsed)) fail(parsed.left);
+    if (E.isLeft(parsed)) return fail(parsed.left);
 
     const github = createGitHubFromEnv(opts.repo);
     const result = await runOrExit(materializePlan(parsed.right, github));
@@ -601,7 +601,7 @@ program
       const rawResult: unknown = JSON.parse(fs.readFileSync(path.resolve(opts.result), 'utf-8'));
       const parsedResult = AgentResultSchema.safeParse(rawResult);
       if (!parsedResult.success) {
-        fail({ type: 'CONFIG_ERROR', message: isoMessage.wrap('Invalid result.json format') });
+        return fail({ type: 'CONFIG_ERROR', message: isoMessage.wrap('Invalid result.json format') });
       }
 
       const agentResult = parsedResult.data;

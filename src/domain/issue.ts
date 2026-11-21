@@ -5,7 +5,6 @@ import { match } from 'ts-pattern';
 import { z } from 'zod';
 import {
   type Body,
-  type BranchName,
   type FieldOptionName,
   type HexColor,
   isoBranchName,
@@ -161,7 +160,7 @@ export type IssueNode = {
   readonly updatedAt: IsoTimestamp;
 };
 
-export function isExecutableLeaf(issue: Pick<IssueNode, 'type' | 'subIssueNumbers'>): boolean {
+export function isExecutableLeaf(issue: Pick<IssueNode, 'type' | 'subIssueNumbers'>) {
   return match(issue.type)
     .with('task', 'bug', () => true)
     .with('story', () => issue.subIssueNumbers.length === 0)
@@ -169,27 +168,27 @@ export function isExecutableLeaf(issue: Pick<IssueNode, 'type' | 'subIssueNumber
     .exhaustive();
 }
 
-export function isContainerIssue(issue: Pick<IssueNode, 'type' | 'subIssueNumbers'>): boolean {
+export function isContainerIssue(issue: Pick<IssueNode, 'type' | 'subIssueNumbers'>) {
   return !isExecutableLeaf(issue);
 }
 
-export function branchNameForIssue(issueNumber: IssueNumber): BranchName {
+export function branchNameForIssue(issueNumber: IssueNumber) {
   return isoBranchName.wrap(`ai/issue-${String(isoIssueNumber.unwrap(issueNumber))}`);
 }
 
-export function extractStatusFromFieldValue(value: O.Option<string>): IssueStatus {
+export function extractStatusFromFieldValue(value: O.Option<string>) {
   return pipe(
     value,
     O.chain((v) => O.fromNullable(FIELD_VALUE_TO_STATUS[v])),
-    O.getOrElse((): IssueStatus => 'backlog'),
+    O.getOrElseW(() => 'backlog' as const),
   );
 }
 
-export function extractTypeFromLabels(labels: ReadonlyArray<LabelName>): IssueType {
+export function extractTypeFromLabels(labels: ReadonlyArray<LabelName>) {
   return pipe(
     labels,
     RA.findFirstMap((label) => O.fromNullable(LABEL_TO_TYPE[isoLabelName.unwrap(label)])),
-    O.getOrElse((): IssueType => 'task'),
+    O.getOrElseW(() => 'task' as const),
   );
 }
 

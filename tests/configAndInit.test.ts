@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as E from 'fp-ts/lib/Either';
-import { pipe } from 'fp-ts/lib/function';
+import { flow, pipe } from 'fp-ts/lib/function';
 import * as RA from 'fp-ts/lib/ReadonlyArray';
 import { describe, expect, it, vi } from 'vitest';
 import { OctokitGitHubAdapter } from '../src/adapters/github/client.js';
@@ -25,7 +25,7 @@ type MockOctokit = {
   };
 };
 
-const getOctokit = (adapter: OctokitGitHubAdapter): MockOctokit =>
+const getOctokit = (adapter: OctokitGitHubAdapter) =>
   Reflect.get(adapter, 'octokit') as MockOctokit;
 
 describe('parseConfig', () => {
@@ -50,13 +50,14 @@ workspace:
 
   it('rejects custom provider without agent.command', () => {
     expect(
-      E.isLeft(
+      pipe(
         parseConfig(`version: 1
 workspace:
   verifyCommand: "pytest"
 agent:
   provider: custom
 `),
+        E.isLeft,
       ),
     ).toBe(true);
   });
@@ -64,7 +65,14 @@ agent:
 
 describe('generateInitFiles', () => {
   it('creates target repo footprint and respects force flag', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pr-flow-init-'));
+    const tmpDir = pipe(path.join(os.tmpdir(), 'pr-flow-init-'), (prefix: string) =>
+      fs.mkdtempSync(prefix),
+    );
+    const hasFile = (rel: string) => pipe(path.join(tmpDir, rel), fs.existsSync);
+    const readFile = flow(
+      (rel: string) => path.join(tmpDir, rel),
+      (p) => fs.readFileSync(p, 'utf-8'),
+    );
     try {
       const first = generateInitFiles({
         targetDir: tmpDir,
@@ -79,17 +87,12 @@ describe('generateInitFiles', () => {
       });
       expect(first.written).toHaveLength(7);
       expect(first.skipped).toHaveLength(0);
-      expect(fs.existsSync(path.join(tmpDir, 'pr-flow.config.yml'))).toBe(true);
-      expect(fs.existsSync(path.join(tmpDir, 'AGENTS.md'))).toBe(true);
-      expect(fs.existsSync(path.join(tmpDir, '.agents/skills/pr-flow/SKILL.md'))).toBe(true);
-      expect(fs.existsSync(path.join(tmpDir, '.github/workflows/pr-flow-implement.yml'))).toBe(true);
-      expect(
-        fs.readFileSync(path.join(tmpDir, '.github/workflows/pr-flow-implement.yml'), 'utf-8'),
-      ).toContain('field_added');
-      const generatedSkill = fs.readFileSync(
-        path.join(tmpDir, '.agents/skills/pr-flow/SKILL.md'),
-        'utf-8',
-      );
+      expect(hasFile('pr-flow.config.yml')).toBe(true);
+      expect(hasFile('AGENTS.md')).toBe(true);
+      expect(hasFile('.agents/skills/pr-flow/SKILL.md')).toBe(true);
+      expect(hasFile('.github/workflows/pr-flow-implement.yml')).toBe(true);
+      expect(readFile('.github/workflows/pr-flow-implement.yml')).toContain('field_added');
+      const generatedSkill = readFile('.agents/skills/pr-flow/SKILL.md');
       expect(generatedSkill).toContain('Parent rollup precedence');
       expect(generatedSkill).toContain('status set --issue');
 
@@ -167,13 +170,11 @@ describe('OctokitGitHubAdapter.ensureStatusField', () => {
     expect(E.isLeft(res)).toBe(true);
     if (E.isLeft(res)) {
       expect(res.left.type).toBe('GITHUB_API_ERROR');
-      if (res.left.type === 'GITHUB_API_ERROR') {
-        expect(isoMessage.unwrap(res.left.message)).toContain('HTTP 403');
-        expect(isoMessage.unwrap(res.left.message)).toContain('fields sync --repo mye-org/pr-flow-demo');
-        expect(isoMessage.unwrap(res.left.message)).toContain(
-          'https://github.com/organizations/mye-org/settings/issue-fields',
-        );
-      }
+      expect(isoMessage.unwrap(res.left.message)).toContain('HTTP 403');
+      expect(isoMessage.unwrap(res.left.message)).toContain('fields sync --repo mye-org/pr-flow-demo');
+      expect(isoMessage.unwrap(res.left.message)).toContain(
+        'https://github.com/organizations/mye-org/settings/issue-fields',
+      );
     }
   });
 
@@ -195,10 +196,8 @@ describe('OctokitGitHubAdapter.ensureStatusField', () => {
     expect(E.isLeft(res)).toBe(true);
     if (E.isLeft(res)) {
       expect(res.left.type).toBe('GITHUB_API_ERROR');
-      if (res.left.type === 'GITHUB_API_ERROR') {
-        expect(isoMessage.unwrap(res.left.message)).toContain('HTTP 404');
-        expect(isoMessage.unwrap(res.left.message)).toContain('GitHub Organization');
-      }
+      expect(isoMessage.unwrap(res.left.message)).toContain('HTTP 404');
+      expect(isoMessage.unwrap(res.left.message)).toContain('GitHub Organization');
     }
   });
 });

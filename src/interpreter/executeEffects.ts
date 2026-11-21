@@ -17,7 +17,7 @@ import {
 export function executeEffect(
   effect: Effect,
   github: GitHubPort,
-): TE.TaskEither<DomainError, void> {
+) {
   return match(effect)
     .with({ type: 'SET_STATUS_FIELD' }, (e) =>
       github.setIssueStatus(isoIssueNumber.unwrap(e.issueNumber), e.to),
@@ -48,7 +48,7 @@ export function executeEffect(
 export function executeEffects(
   effects: ReadonlyArray<Effect>,
   github: GitHubPort,
-): TE.TaskEither<DomainError, void> {
+) {
   return pipe(
     effects,
     RA.reduce(TE.right(undefined) as TE.TaskEither<DomainError, void>, (acc, effect) =>

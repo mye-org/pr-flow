@@ -21,7 +21,7 @@ import {
 } from '../src/domain/newtypes.js';
 import { executeEffect, executeEffects } from '../src/interpreter/executeEffects.js';
 
-const mockGithub = (overrides: Partial<GitHubPort> = {}): GitHubPort => ({
+const mockGithub = (overrides: Partial<GitHubPort> = {}) => ({
   getIssue: vi.fn(),
   listAllIssues: vi.fn(),
   createIssue: vi.fn(),

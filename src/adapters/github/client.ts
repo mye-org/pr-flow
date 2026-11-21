@@ -32,12 +32,10 @@ import type {
   GitHubPort,
   ManagedPrSummary,
   PreflightCheckResult,
-  PrReviewFeedback,
   PrReviewThread,
-  PullRequestSummary,
 } from './types.js';
 
-function toGitHubError(context: string, err: unknown): DomainError {
+function toGitHubError(context: string, err: unknown) {
   const status =
     typeof err === 'object' && err !== null && 'status' in err
       ? Number(err.status)
@@ -48,7 +46,7 @@ function toGitHubError(context: string, err: unknown): DomainError {
     message: isoMessage.wrap(`${context}: ${message}`),
     status: status !== undefined && Number.isFinite(status) ? O.some(isoCount.wrap(status)) : O.none,
     cause: O.some(isoMessage.wrap(message)),
-  };
+  } satisfies DomainError;
 }
 
 type RawGitHubIssue = {
@@ -84,7 +82,7 @@ type GraphQLIssueNode = {
 function extractStatusFieldValueFromGraphQL(
   nodes: ReadonlyArray<GraphQLIssueFieldValueNode> | undefined,
   fieldName: string,
-): string | null {
+) {
   if (!nodes) return null;
   for (const node of nodes) {
     if (node.field?.name === fieldName && typeof node.name === 'string') {
@@ -100,7 +98,7 @@ function mapRawIssue(
   blockedByNumbers: ReadonlyArray<number> = [],
   blockingNumbers: ReadonlyArray<number> = [],
   statusValue: string | null = null,
-): IssueNode {
+) {
   const labels = raw.labels
     .map((l) => (typeof l === 'string' ? l : (l.name ?? '')))
     .filter((l) => l.length > 0)
@@ -110,7 +108,7 @@ function mapRawIssue(
     number: isoIssueNumber.wrap(raw.number),
     title: isoTitle.wrap(raw.title),
     body: isoBody.wrap(raw.body ?? ''),
-    state: raw.state === 'closed' ? 'closed' : 'open',
+    state: raw.state === 'closed' ? ('closed' as const) : ('open' as const),
     status: extractStatusFromFieldValue(O.fromNullable(statusValue)),
     type: extractTypeFromLabels(labels),
     labels,
@@ -145,10 +143,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     this.statusFieldName = options.statusFieldName ?? PR_FLOW_STATUS_FIELD_NAME;
   }
 
-  private async findStatusFieldViaGraphql(): Promise<{
-    id: string;
-    optionsByName: ReadonlyMap<string, string>;
-  } | null> {
+  private async findStatusFieldViaGraphql() {
     if (this.cachedStatusField !== null) {
       return this.cachedStatusField;
     }
@@ -202,10 +197,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     return this.cachedStatusField;
   }
 
-  private async resolveStatusField(): Promise<{
-    id: string;
-    optionsByName: ReadonlyMap<string, string>;
-  }> {
+  private async resolveStatusField() {
     const field = await this.findStatusFieldViaGraphql();
     if (!field) {
       throw new Error(
@@ -215,7 +207,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     return field;
   }
 
-  private getIssueStatusFieldValue(issueNumber: number): TE.TaskEither<DomainError, string | null> {
+  private getIssueStatusFieldValue(issueNumber: number) {
     return TE.tryCatch(
       async () => {
         const query = `
@@ -260,7 +252,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  setIssueStatus(issueNumber: number, status: IssueStatus): TE.TaskEither<DomainError, void> {
+  setIssueStatus(issueNumber: number, status: IssueStatus) {
     return TE.tryCatch(
       async () => {
         const { id: fieldId, optionsByName } = await this.resolveStatusField();
@@ -321,7 +313,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  ensureStatusField(): TE.TaskEither<DomainError, void> {
+  ensureStatusField() {
     return TE.tryCatch(
       async () => {
         const existing = await this.findStatusFieldViaGraphql();
@@ -354,11 +346,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
           `Failed to ensure "${this.statusFieldName}" issue field in org "${this.owner}"`,
           err,
         );
-        if (
-          baseErr.type === 'GITHUB_API_ERROR' &&
-          O.isSome(baseErr.status) &&
-          isoCount.unwrap(baseErr.status.value) === 403
-        ) {
+        if (O.isSome(baseErr.status) && isoCount.unwrap(baseErr.status.value) === 403) {
           const optionNames = PR_FLOW_STATUS_OPTIONS.map((o) =>
             isoFieldOptionName.unwrap(o.name),
           ).join(', ');
@@ -371,11 +359,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
             ),
           };
         }
-        if (
-          baseErr.type === 'GITHUB_API_ERROR' &&
-          O.isSome(baseErr.status) &&
-          isoCount.unwrap(baseErr.status.value) === 404
-        ) {
+        if (O.isSome(baseErr.status) && isoCount.unwrap(baseErr.status.value) === 404) {
           return {
             ...baseErr,
             message: isoMessage.wrap(
@@ -388,7 +372,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  getIssue(issueNumber: number): TE.TaskEither<DomainError, IssueNode> {
+  getIssue(issueNumber: number) {
     return pipe(
       TE.tryCatch(
         () =>
@@ -422,7 +406,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
 
   listAllIssues(
     state: 'open' | 'closed' | 'all' = 'all',
-  ): TE.TaskEither<DomainError, ReadonlyArray<IssueNode>> {
+  ) {
     return TE.tryCatch(
       async () => {
         const states = (() => {
@@ -497,7 +481,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
               number: isoIssueNumber.wrap(node.number),
               title: isoTitle.wrap(node.title),
               body: isoBody.wrap(node.body ?? ''),
-              state: node.state === 'CLOSED' ? 'closed' : 'open',
+              state: node.state === 'CLOSED' ? ('closed' as const) : ('open' as const),
               status: extractStatusFromFieldValue(O.fromNullable(statusValue)),
               type: extractTypeFromLabels(labels),
               labels,
@@ -525,7 +509,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
 
   createIssue(
     input: CreateIssueInput,
-  ): TE.TaskEither<DomainError, { readonly number: number; readonly url: string }> {
+  ) {
     return TE.tryCatch(
       async () => {
         const res = await this.octokit.rest.issues.create({
@@ -541,7 +525,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  closeIssue(issueNumber: number): TE.TaskEither<DomainError, void> {
+  closeIssue(issueNumber: number) {
     return TE.tryCatch(
       async () => {
         await this.octokit.rest.issues.update({
@@ -555,7 +539,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  reopenIssue(issueNumber: number): TE.TaskEither<DomainError, void> {
+  reopenIssue(issueNumber: number) {
     return TE.tryCatch(
       async () => {
         await this.octokit.rest.issues.update({
@@ -569,7 +553,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  addLabels(issueNumber: number, labels: ReadonlyArray<string>): TE.TaskEither<DomainError, void> {
+  addLabels(issueNumber: number, labels: ReadonlyArray<string>) {
     if (labels.length === 0) return TE.right(undefined);
     return TE.tryCatch(
       async () => {
@@ -584,7 +568,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  removeLabel(issueNumber: number, label: string): TE.TaskEither<DomainError, void> {
+  removeLabel(issueNumber: number, label: string) {
     return TE.tryCatch(
       async () => {
         try {
@@ -606,11 +590,11 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  addComment(issueNumber: number, body: string): TE.TaskEither<DomainError, void> {
+  addComment(issueNumber: number, body: string) {
     return this.addCommentImpl(issueNumber, body);
   }
 
-  private addCommentImpl(issueNumber: number, body: string): TE.TaskEither<DomainError, void> {
+  private addCommentImpl(issueNumber: number, body: string) {
     return TE.tryCatch(
       async () => {
         await this.octokit.rest.issues.createComment({
@@ -624,7 +608,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  listIssueComments(issueNumber: number): TE.TaskEither<DomainError, ReadonlyArray<string>> {
+  listIssueComments(issueNumber: number) {
     return TE.tryCatch(
       async () => {
         const comments = await this.octokit.paginate(this.octokit.rest.issues.listComments, {
@@ -643,7 +627,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     workflowFile: string,
     ref: string,
     inputs: Readonly<Record<string, string>>,
-  ): TE.TaskEither<DomainError, void> {
+  ) {
     return TE.tryCatch(
       async () => {
         await this.octokit.rest.actions.createWorkflowDispatch({
@@ -658,7 +642,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  ensureLabels(labels: ReadonlyArray<LabelDefinition>): TE.TaskEither<DomainError, void> {
+  ensureLabels(labels: ReadonlyArray<LabelDefinition>) {
     return TE.tryCatch(
       async () => {
         const existing = await this.octokit.paginate(this.octokit.rest.issues.listLabelsForRepo, {
@@ -696,7 +680,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  listSubIssues(issueNumber: number): TE.TaskEither<DomainError, ReadonlyArray<number>> {
+  listSubIssues(issueNumber: number) {
     return TE.tryCatch(
       async () => {
         try {
@@ -722,7 +706,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  addSubIssue(parentNumber: number, childNumber: number): TE.TaskEither<DomainError, void> {
+  addSubIssue(parentNumber: number, childNumber: number) {
     return TE.tryCatch(
       async () => {
         const child = await this.octokit.rest.issues.get({
@@ -748,7 +732,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  listBlockedBy(issueNumber: number): TE.TaskEither<DomainError, ReadonlyArray<IssueNode>> {
+  listBlockedBy(issueNumber: number) {
     return TE.tryCatch(
       async () => {
         try {
@@ -774,7 +758,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  listBlocking(issueNumber: number): TE.TaskEither<DomainError, ReadonlyArray<number>> {
+  listBlocking(issueNumber: number) {
     return TE.tryCatch(
       async () => {
         try {
@@ -800,7 +784,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  addBlockedBy(issueNumber: number, blockerNumber: number): TE.TaskEither<DomainError, void> {
+  addBlockedBy(issueNumber: number, blockerNumber: number) {
     return TE.tryCatch(
       async () => {
         const blocker = await this.octokit.rest.issues.get({
@@ -826,7 +810,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  listOpenPrsForIssue(issueNumber: number): TE.TaskEither<DomainError, ReadonlyArray<PullRequestSummary>> {
+  listOpenPrsForIssue(issueNumber: number) {
     return TE.tryCatch(
       async () => {
         const branch = isoBranchName.unwrap(branchNameForIssue(isoIssueNumber.wrap(issueNumber)));
@@ -840,7 +824,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
           number: pr.number,
           url: pr.html_url,
           headRef: pr.head.ref,
-          state: pr.state === 'closed' ? 'closed' : 'open',
+          state: pr.state === 'closed' ? ('closed' as const) : ('open' as const),
           merged: false,
         }));
       },
@@ -848,7 +832,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  listOpenAiManagedPrs(): TE.TaskEither<DomainError, ReadonlyArray<ManagedPrSummary>> {
+  listOpenAiManagedPrs() {
     return TE.tryCatch(
       async () => {
         const prs = await this.octokit.paginate(this.octokit.rest.pulls.list, {
@@ -891,7 +875,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  createPullRequest(input: CreatePullRequestInput): TE.TaskEither<DomainError, PullRequestSummary> {
+  createPullRequest(input: CreatePullRequestInput) {
     return TE.tryCatch(
       async () => {
         const res = await this.octokit.rest.pulls.create({
@@ -914,7 +898,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
           number: res.data.number,
           url: res.data.html_url,
           headRef: res.data.head.ref,
-          state: res.data.state === 'closed' ? 'closed' : 'open',
+          state: res.data.state === 'closed' ? ('closed' as const) : ('open' as const),
           merged: res.data.merged,
         };
       },
@@ -925,7 +909,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
   mergePullRequest(
     prNumber: number,
     method: 'squash' | 'merge' | 'rebase',
-  ): TE.TaskEither<DomainError, void> {
+  ) {
     return TE.tryCatch(
       async () => {
         await this.octokit.rest.pulls.merge({
@@ -939,11 +923,11 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  addPrComment(prNumber: number, body: string): TE.TaskEither<DomainError, void> {
+  addPrComment(prNumber: number, body: string) {
     return this.addComment(prNumber, body);
   }
 
-  getPrReviewComments(prNumber: number): TE.TaskEither<DomainError, ReadonlyArray<string>> {
+  getPrReviewComments(prNumber: number) {
     return TE.tryCatch(
       async () => {
         const [reviews, issueComments] = await Promise.all([
@@ -1088,7 +1072,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  getPrReviewThreads(prNumber: number): TE.TaskEither<DomainError, ReadonlyArray<PrReviewThread>> {
+  getPrReviewThreads(prNumber: number) {
     return TE.tryCatch(
       async () => {
         const query = `
@@ -1188,7 +1172,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  getPrReviewFeedback(prNumber: number): TE.TaskEither<DomainError, PrReviewFeedback> {
+  getPrReviewFeedback(prNumber: number) {
     return pipe(
       this.getPrReviewThreads(prNumber),
       TE.chain((allThreads) =>
@@ -1230,7 +1214,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  replyToReviewThread(threadId: string, body: string): TE.TaskEither<DomainError, void> {
+  replyToReviewThread(threadId: string, body: string) {
     return TE.tryCatch(
       async () => {
         const mutation = `
@@ -1248,7 +1232,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  resolveReviewThread(threadId: string): TE.TaskEither<DomainError, void> {
+  resolveReviewThread(threadId: string) {
     return TE.tryCatch(
       async () => {
         const mutation = `
@@ -1271,11 +1255,11 @@ export class OctokitGitHubAdapter implements GitHubPort {
     prFlowOwner: string;
     expectedLabels?: ReadonlyArray<LabelDefinition>;
     secretName?: string;
-  }): TE.TaskEither<DomainError, ReadonlyArray<PreflightCheckResult>> {
+  }) {
     return TE.tryCatch(
       async () => {
         let results: ReadonlyArray<PreflightCheckResult> = [];
-        const addResult = (r: PreflightCheckResult): void => {
+        const addResult = (r: PreflightCheckResult) => {
           results = [...results, r];
         };
         const secretName = opts.secretName ?? 'GEMINI_API_KEY';

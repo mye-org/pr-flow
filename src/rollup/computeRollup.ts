@@ -5,17 +5,17 @@ import { match } from 'ts-pattern';
 import type { Effect } from '../domain/effects.js';
 import type { IssueNode, IssueStatus } from '../domain/issue.js';
 
-const computeNonEmptyStatus = (statuses: ReadonlyArray<IssueStatus>): IssueStatus =>
+const computeNonEmptyStatus = (statuses: ReadonlyArray<IssueStatus>) =>
   match(statuses)
-    .when(RA.some((s) => s === 'needs_human'), (): IssueStatus => 'needs_human')
-    .when(RA.every((s) => s === 'fixed'), (): IssueStatus => 'fixed')
+    .when(RA.some((s) => s === 'needs_human'), () => 'needs_human' as const)
+    .when(RA.every((s) => s === 'fixed'), () => 'fixed' as const)
     .when(
       RA.some((s) => s === 'in_progress' || s === 'review_pending' || s === 'fixed'),
-      (): IssueStatus => 'in_progress',
+      () => 'in_progress' as const,
     )
-    .when(RA.some((s) => s === 'ready'), (): IssueStatus => 'ready')
-    .when(RA.some((s) => s === 'blocked_dep'), (): IssueStatus => 'blocked_dep')
-    .otherwise((): IssueStatus => 'backlog');
+    .when(RA.some((s) => s === 'ready'), () => 'ready' as const)
+    .when(RA.some((s) => s === 'blocked_dep'), () => 'blocked_dep' as const)
+    .otherwise(() => 'backlog' as const);
 
 /**
  * Pure rollup status computation for container issues (Epics and non-leaf Stories).
@@ -27,11 +27,9 @@ const computeNonEmptyStatus = (statuses: ReadonlyArray<IssueStatus>): IssueStatu
  *   5. Any child `blocked_dep` -> `blocked_dep`
  *   6. Otherwise -> `backlog`
  */
-export function computeContainerStatus(
-  children: ReadonlyArray<Pick<IssueNode, 'status'>>,
-): IssueStatus {
+export function computeContainerStatus(children: ReadonlyArray<Pick<IssueNode, 'status'>>) {
   return match(children.length === 0)
-    .with(true, (): IssueStatus => 'backlog')
+    .with(true, () => 'backlog' as const)
     .with(false, () =>
       pipe(
         children,
@@ -45,27 +43,29 @@ export function computeContainerStatus(
 const buildStatusEffects = (
   parent: Pick<IssueNode, 'number' | 'status'>,
   targetStatus: IssueStatus,
-): ReadonlyArray<Effect> =>
+) =>
   match(targetStatus !== parent.status)
-    .with(true, (): ReadonlyArray<Effect> => [
-      {
-        type: 'SET_STATUS_FIELD',
-        issueNumber: parent.number,
-        from: O.some(parent.status),
-        to: targetStatus,
-      },
-    ])
-    .with(false, (): ReadonlyArray<Effect> => [])
+    .with(true, () =>
+      [
+        {
+          type: 'SET_STATUS_FIELD',
+          issueNumber: parent.number,
+          from: O.some(parent.status),
+          to: targetStatus,
+        },
+      ] satisfies ReadonlyArray<Effect>,
+    )
+    .with(false, () => [] satisfies ReadonlyArray<Effect>)
     .exhaustive();
 
 const buildLifecycleEffects = (
   parent: Pick<IssueNode, 'number' | 'state'>,
   targetStatus: IssueStatus,
-): ReadonlyArray<Effect> =>
+) =>
   match([targetStatus, parent.state] as const)
-    .with(['fixed', 'open'], (): ReadonlyArray<Effect> => [
-      { type: 'CLOSE_ISSUE', issueNumber: parent.number },
-    ])
+    .with(['fixed', 'open'], () =>
+      [{ type: 'CLOSE_ISSUE', issueNumber: parent.number }] satisfies ReadonlyArray<Effect>,
+    )
     .with(
       ['backlog', 'closed'],
       ['blocked_dep', 'closed'],
@@ -73,19 +73,19 @@ const buildLifecycleEffects = (
       ['in_progress', 'closed'],
       ['review_pending', 'closed'],
       ['needs_human', 'closed'],
-      (): ReadonlyArray<Effect> => [{ type: 'REOPEN_ISSUE', issueNumber: parent.number }],
+      () => [{ type: 'REOPEN_ISSUE', issueNumber: parent.number }] satisfies ReadonlyArray<Effect>,
     )
-    .otherwise((): ReadonlyArray<Effect> => []);
+    .otherwise(() => [] satisfies ReadonlyArray<Effect>);
 
 export function computeRollupEffects(
   parent: Pick<IssueNode, 'number' | 'status' | 'state'>,
   children: ReadonlyArray<Pick<IssueNode, 'status'>>,
-): { readonly targetStatus: IssueStatus; readonly effects: ReadonlyArray<Effect> } {
+) {
   return pipe(computeContainerStatus(children), (targetStatus) => ({
     targetStatus,
     effects: [
       ...buildStatusEffects(parent, targetStatus),
       ...buildLifecycleEffects(parent, targetStatus),
-    ],
+    ] satisfies ReadonlyArray<Effect>,
   }));
 }

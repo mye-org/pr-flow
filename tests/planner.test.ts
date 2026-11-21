@@ -42,7 +42,7 @@ describe('planner DAG validation & topoSort', () => {
     expect(E.isRight(parsed)).toBe(true);
     if (E.isLeft(parsed)) return;
 
-    expect(E.isRight(validatePlanDag(parsed.right))).toBe(true);
+    expect(pipe(parsed.right, validatePlanDag, E.isRight)).toBe(true);
 
     const ids = pipe(
       topoSortPlan(parsed.right),

@@ -2,7 +2,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as E from 'fp-ts/Either';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { OctokitGitHubAdapter } from '../src/adapters/github/client.js';
 import { generateInitFiles } from '../src/cli/init.js';
 import { parseConfig } from '../src/domain/config.js';
 
@@ -84,3 +85,51 @@ describe('generateInitFiles', () => {
     }
   });
 });
+
+describe('OctokitGitHubAdapter.ensureStatusField', () => {
+  it('returns actionable remediation instructions on HTTP 403', async () => {
+    const adapter = new OctokitGitHubAdapter({
+      token: 'test-token',
+      owner: 'mye-org',
+      repo: 'pr-flow-demo',
+    });
+    const octokit = (adapter as unknown as { octokit: { request: (...args: unknown[]) => Promise<unknown> } }).octokit;
+    vi.spyOn(octokit, 'request').mockRejectedValueOnce(
+      Object.assign(new Error('Resource not accessible by integration'), { status: 403 }),
+    );
+
+    const res = await adapter.ensureStatusField()();
+    expect(E.isLeft(res)).toBe(true);
+    if (E.isLeft(res)) {
+      expect(res.left.type).toBe('GITHUB_API_ERROR');
+      if (res.left.type === 'GITHUB_API_ERROR') {
+        expect(res.left.message).toContain('HTTP 403');
+        expect(res.left.message).toContain('fields sync --repo mye-org/pr-flow-demo');
+        expect(res.left.message).toContain('https://github.com/organizations/mye-org/settings/issue-fields');
+      }
+    }
+  });
+
+  it('returns organization hint on HTTP 404', async () => {
+    const adapter = new OctokitGitHubAdapter({
+      token: 'test-token',
+      owner: 'personal-user',
+      repo: 'demo',
+    });
+    const octokit = (adapter as unknown as { octokit: { request: (...args: unknown[]) => Promise<unknown> } }).octokit;
+    vi.spyOn(octokit, 'request').mockRejectedValueOnce(
+      Object.assign(new Error('Not Found'), { status: 404 }),
+    );
+
+    const res = await adapter.ensureStatusField()();
+    expect(E.isLeft(res)).toBe(true);
+    if (E.isLeft(res)) {
+      expect(res.left.type).toBe('GITHUB_API_ERROR');
+      if (res.left.type === 'GITHUB_API_ERROR') {
+        expect(res.left.message).toContain('HTTP 404');
+        expect(res.left.message).toContain('GitHub Organization');
+      }
+    }
+  });
+});
+

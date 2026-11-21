@@ -239,7 +239,30 @@ export class OctokitGitHubAdapter implements GitHubPort {
           this.cachedStatusFieldId = createdData.id;
         }
       },
-      (err) => toGitHubError(`Failed to ensure "${this.statusFieldName}" issue field in org "${this.owner}"`, err),
+      (err) => {
+        const baseErr = toGitHubError(
+          `Failed to ensure "${this.statusFieldName}" issue field in org "${this.owner}"`,
+          err,
+        );
+        if (baseErr.type === 'GITHUB_API_ERROR' && baseErr.status === 403) {
+          const optionNames = PR_FLOW_STATUS_OPTIONS.map((o) => o.name).join(', ');
+          return {
+            ...baseErr,
+            message:
+              `Failed to ensure "${this.statusFieldName}" issue field in org "${this.owner}" (HTTP 403: token lacks organization-admin permissions for org-level Issue Fields). ` +
+              `Run \`GITHUB_TOKEN=$(gh auth token) npx --yes github:<owner>/pr-flow#v1 fields sync --repo ${this.owner}/${this.repo}\` with an org-admin token, ` +
+              `or create the single-select field "${this.statusFieldName}" (options: ${optionNames}) at https://github.com/organizations/${this.owner}/settings/issue-fields.`,
+          };
+        }
+        if (baseErr.type === 'GITHUB_API_ERROR' && baseErr.status === 404) {
+          return {
+            ...baseErr,
+            message:
+              `Failed to ensure "${this.statusFieldName}" issue field in org "${this.owner}" (HTTP 404: "${this.owner}" may be a personal account rather than a GitHub Organization, or Issue Fields are not enabled).`,
+          };
+        }
+        return baseErr;
+      },
     );
   }
 

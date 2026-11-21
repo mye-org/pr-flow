@@ -19009,29 +19009,54 @@ var OctokitGitHubAdapter = class {
   owner;
   repo;
   statusFieldName;
-  cachedStatusFieldId = null;
+  cachedStatusField = null;
   constructor(options) {
     this.octokit = new Octokit2({ auth: options.token });
     this.owner = options.owner;
     this.repo = options.repo;
     this.statusFieldName = options.statusFieldName ?? PR_FLOW_STATUS_FIELD_NAME;
   }
-  async resolveStatusFieldId() {
-    if (this.cachedStatusFieldId !== null) {
-      return this.cachedStatusFieldId;
+  async resolveStatusField() {
+    if (this.cachedStatusField !== null) {
+      return this.cachedStatusField;
     }
-    const res = await this.octokit.request("GET /orgs/{org}/issue-fields", {
-      org: this.owner
+    const query = `
+      query ResolveIssueField($owner: String!, $repo: String!) {
+        repository(owner: $owner, name: $repo) {
+          issueFields(first: 20) {
+            nodes {
+              __typename
+              ... on IssueFieldSingleSelect {
+                id
+                name
+                options {
+                  id
+                  name
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+    const data = await this.octokit.graphql(query, {
+      owner: this.owner,
+      repo: this.repo,
+      headers: { "GraphQL-Features": "issue_fields" }
     });
-    const fields = res.data;
-    const match3 = fields.find((f) => f.name === this.statusFieldName);
-    if (!match3) {
+    const match3 = data.repository.issueFields.nodes.find(
+      (f) => f.__typename === "IssueFieldSingleSelect" && f.name === this.statusFieldName
+    );
+    if (!match3 || !match3.id || !match3.options) {
       throw new Error(
         `Issue field "${this.statusFieldName}" not found in organization "${this.owner}". Run "pr-flow fields sync --repo ${this.owner}/${this.repo}" with an org-admin token or create it in Organization Settings -> Issue Fields.`
       );
     }
-    this.cachedStatusFieldId = match3.id;
-    return match3.id;
+    this.cachedStatusField = {
+      id: match3.id,
+      optionsByName: new Map(match3.options.map((opt) => [opt.name, opt.id]))
+    };
+    return this.cachedStatusField;
   }
   getIssueStatusFieldValue(issueNumber) {
     return tryCatch(
@@ -19074,21 +19099,51 @@ var OctokitGitHubAdapter = class {
   setIssueStatus(issueNumber, status) {
     return tryCatch(
       async () => {
-        const fieldId = await this.resolveStatusFieldId();
-        await this.octokit.request(
-          "POST /repos/{owner}/{repo}/issues/{issue_number}/issue-field-values",
-          {
-            owner: this.owner,
-            repo: this.repo,
-            issue_number: issueNumber,
-            issue_field_values: [
+        const { id: fieldId, optionsByName } = await this.resolveStatusField();
+        const optionName = STATUS_TO_FIELD_VALUE[status];
+        const singleSelectOptionId = optionsByName.get(optionName);
+        if (!singleSelectOptionId) {
+          throw new Error(
+            `Option "${optionName}" not found on issue field "${this.statusFieldName}". Run "pr-flow fields sync --repo ${this.owner}/${this.repo}" with an org-admin token.`
+          );
+        }
+        const issueQuery = `
+          query GetIssueNodeId($owner: String!, $repo: String!, $number: Int!) {
+            repository(owner: $owner, name: $repo) {
+              issue(number: $number) {
+                id
+              }
+            }
+          }
+        `;
+        const issueData = await this.octokit.graphql(issueQuery, {
+          owner: this.owner,
+          repo: this.repo,
+          number: issueNumber
+        });
+        const issueId = issueData.repository.issue?.id;
+        if (!issueId) {
+          throw new Error(`Issue #${issueNumber} not found in ${this.owner}/${this.repo}.`);
+        }
+        const mutation = `
+          mutation SetIssueFieldValue($input: SetIssueFieldValueInput!) {
+            setIssueFieldValue(input: $input) {
+              clientMutationId
+            }
+          }
+        `;
+        await this.octokit.graphql(mutation, {
+          input: {
+            issueId,
+            issueFields: [
               {
-                field_id: fieldId,
-                value: STATUS_TO_FIELD_VALUE[status]
+                fieldId,
+                singleSelectOptionId
               }
             ]
-          }
-        );
+          },
+          headers: { "GraphQL-Features": "issue_fields" }
+        });
       },
       (err) => toGitHubError(`Failed to set "${this.statusFieldName}" on #${issueNumber} to "${status}"`, err)
     );
@@ -19102,10 +19157,9 @@ var OctokitGitHubAdapter = class {
         const fields = res.data;
         const existing = fields.find((f) => f.name === this.statusFieldName);
         if (existing) {
-          this.cachedStatusFieldId = existing.id;
           return;
         }
-        const created = await this.octokit.request("POST /orgs/{org}/issue-fields", {
+        await this.octokit.request("POST /orgs/{org}/issue-fields", {
           org: this.owner,
           name: this.statusFieldName,
           data_type: "single_select",
@@ -19116,10 +19170,6 @@ var OctokitGitHubAdapter = class {
             description: opt.description
           }))
         });
-        const createdData = created.data;
-        if (typeof createdData.id === "number") {
-          this.cachedStatusFieldId = createdData.id;
-        }
       },
       (err) => {
         const baseErr = toGitHubError(

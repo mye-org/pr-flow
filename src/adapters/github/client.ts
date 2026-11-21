@@ -111,7 +111,10 @@ export class OctokitGitHubAdapter implements GitHubPort {
   private readonly owner: string;
   private readonly repo: string;
   private readonly statusFieldName: string;
-  private cachedStatusFieldId: number | null = null;
+  private cachedStatusField: {
+    id: string;
+    optionsByName: Map<string, string>;
+  } | null = null;
 
   constructor(options: {
     token: string;
@@ -125,22 +128,63 @@ export class OctokitGitHubAdapter implements GitHubPort {
     this.statusFieldName = options.statusFieldName ?? PR_FLOW_STATUS_FIELD_NAME;
   }
 
-  private async resolveStatusFieldId(): Promise<number> {
-    if (this.cachedStatusFieldId !== null) {
-      return this.cachedStatusFieldId;
+  private async resolveStatusField(): Promise<{
+    id: string;
+    optionsByName: Map<string, string>;
+  }> {
+    if (this.cachedStatusField !== null) {
+      return this.cachedStatusField;
     }
-    const res = await this.octokit.request('GET /orgs/{org}/issue-fields', {
-      org: this.owner,
+    const query = `
+      query ResolveIssueField($owner: String!, $repo: String!) {
+        repository(owner: $owner, name: $repo) {
+          issueFields(first: 20) {
+            nodes {
+              __typename
+              ... on IssueFieldSingleSelect {
+                id
+                name
+                options {
+                  id
+                  name
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+    const data = await this.octokit.graphql<{
+      repository: {
+        issueFields: {
+          nodes: Array<{
+            __typename?: string;
+            id?: string;
+            name?: string;
+            options?: Array<{ id: string; name: string }>;
+          }>;
+        };
+      };
+    }>(query, {
+      owner: this.owner,
+      repo: this.repo,
+      headers: { 'GraphQL-Features': 'issue_fields' },
     });
-    const fields = res.data as Array<{ id: number; name: string }>;
-    const match = fields.find((f) => f.name === this.statusFieldName);
-    if (!match) {
+
+    const match = data.repository.issueFields.nodes.find(
+      (f) => f.__typename === 'IssueFieldSingleSelect' && f.name === this.statusFieldName,
+    );
+    if (!match || !match.id || !match.options) {
       throw new Error(
         `Issue field "${this.statusFieldName}" not found in organization "${this.owner}". Run "pr-flow fields sync --repo ${this.owner}/${this.repo}" with an org-admin token or create it in Organization Settings -> Issue Fields.`,
       );
     }
-    this.cachedStatusFieldId = match.id;
-    return match.id;
+
+    this.cachedStatusField = {
+      id: match.id,
+      optionsByName: new Map(match.options.map((opt) => [opt.name, opt.id])),
+    };
+    return this.cachedStatusField;
   }
 
   private getIssueStatusFieldValue(issueNumber: number): TE.TaskEither<DomainError, string | null> {
@@ -191,21 +235,55 @@ export class OctokitGitHubAdapter implements GitHubPort {
   setIssueStatus(issueNumber: number, status: IssueStatus): TE.TaskEither<DomainError, void> {
     return TE.tryCatch(
       async () => {
-        const fieldId = await this.resolveStatusFieldId();
-        await this.octokit.request(
-          'POST /repos/{owner}/{repo}/issues/{issue_number}/issue-field-values',
-          {
-            owner: this.owner,
-            repo: this.repo,
-            issue_number: issueNumber,
-            issue_field_values: [
+        const { id: fieldId, optionsByName } = await this.resolveStatusField();
+        const optionName = STATUS_TO_FIELD_VALUE[status];
+        const singleSelectOptionId = optionsByName.get(optionName);
+        if (!singleSelectOptionId) {
+          throw new Error(
+            `Option "${optionName}" not found on issue field "${this.statusFieldName}". Run "pr-flow fields sync --repo ${this.owner}/${this.repo}" with an org-admin token.`,
+          );
+        }
+
+        const issueQuery = `
+          query GetIssueNodeId($owner: String!, $repo: String!, $number: Int!) {
+            repository(owner: $owner, name: $repo) {
+              issue(number: $number) {
+                id
+              }
+            }
+          }
+        `;
+        const issueData = await this.octokit.graphql<{
+          repository: { issue: { id: string } | null };
+        }>(issueQuery, {
+          owner: this.owner,
+          repo: this.repo,
+          number: issueNumber,
+        });
+        const issueId = issueData.repository.issue?.id;
+        if (!issueId) {
+          throw new Error(`Issue #${issueNumber} not found in ${this.owner}/${this.repo}.`);
+        }
+
+        const mutation = `
+          mutation SetIssueFieldValue($input: SetIssueFieldValueInput!) {
+            setIssueFieldValue(input: $input) {
+              clientMutationId
+            }
+          }
+        `;
+        await this.octokit.graphql(mutation, {
+          input: {
+            issueId,
+            issueFields: [
               {
-                field_id: fieldId,
-                value: STATUS_TO_FIELD_VALUE[status],
+                fieldId,
+                singleSelectOptionId,
               },
             ],
           },
-        );
+          headers: { 'GraphQL-Features': 'issue_fields' },
+        });
       },
       (err) => toGitHubError(`Failed to set "${this.statusFieldName}" on #${issueNumber} to "${status}"`, err),
     );
@@ -220,10 +298,9 @@ export class OctokitGitHubAdapter implements GitHubPort {
         const fields = res.data as Array<{ id: number; name: string }>;
         const existing = fields.find((f) => f.name === this.statusFieldName);
         if (existing) {
-          this.cachedStatusFieldId = existing.id;
           return;
         }
-        const created = await this.octokit.request('POST /orgs/{org}/issue-fields', {
+        await this.octokit.request('POST /orgs/{org}/issue-fields', {
           org: this.owner,
           name: this.statusFieldName,
           data_type: 'single_select',
@@ -234,10 +311,6 @@ export class OctokitGitHubAdapter implements GitHubPort {
             description: opt.description,
           })),
         });
-        const createdData = created.data as { id?: number };
-        if (typeof createdData.id === 'number') {
-          this.cachedStatusFieldId = createdData.id;
-        }
       },
       (err) => {
         const baseErr = toGitHubError(

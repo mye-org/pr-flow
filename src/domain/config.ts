@@ -81,6 +81,6 @@ export function parseConfig(yamlContent: string) {
           ),
         }) satisfies DomainError,
     ),
-    E.chain(validateConfigSchema),
+    E.flatMap(validateConfigSchema),
   );
 }

@@ -1,5 +1,4 @@
 import { pipe } from 'fp-ts/lib/function';
-import type * as O from 'fp-ts/lib/Option';
 import * as RA from 'fp-ts/lib/ReadonlyArray';
 import { match } from 'ts-pattern';
 import type { IssueStatus, IssueType } from './issue.js';
@@ -13,6 +12,18 @@ import {
 } from './newtypes.js';
 
 export type Retryability = 'retryable' | 'fatal';
+
+export type HttpStatusCode =
+  | { readonly kind: 'known'; readonly code: Count }
+  | { readonly kind: 'unknown' };
+
+export type ErrorCause =
+  | { readonly kind: 'present'; readonly detail: Message }
+  | { readonly kind: 'none' };
+
+export type ProcessExitCode =
+  | { readonly kind: 'code'; readonly value: Count }
+  | { readonly kind: 'unknown' };
 
 export type GuardError =
   | { readonly type: 'WIP_LIMIT_REACHED'; readonly currentWip: Count; readonly limit: Count }
@@ -39,19 +50,19 @@ export type DomainError =
   | {
       readonly type: 'PLAN_VALIDATION_ERROR';
       readonly message: Message;
-      readonly details: O.Option<ReadonlyArray<Message>>;
+      readonly details: ReadonlyArray<Message>;
     }
   | {
       readonly type: 'GITHUB_API_ERROR';
       readonly message: Message;
-      readonly status: O.Option<Count>;
-      readonly cause: O.Option<Message>;
+      readonly httpStatus: HttpStatusCode;
+      readonly cause: ErrorCause;
     }
   | {
       readonly type: 'AGENT_EXECUTION_ERROR';
       readonly message: Message;
-      readonly exitCode: O.Option<Count>;
-      readonly retryability: O.Option<Retryability>;
+      readonly exitCode: ProcessExitCode;
+      readonly retryability: Retryability;
     }
   | { readonly type: 'GUARD_ERROR'; readonly guard: GuardError }
   | { readonly type: 'GIT_ERROR'; readonly message: Message };

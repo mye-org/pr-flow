@@ -29,31 +29,70 @@ import {
 import type {
   CreateIssueInput,
   CreatePullRequestInput,
-  GitHubPort,
   ManagedPrSummary,
   PreflightCheckResult,
   PrReviewThread,
 } from './types.js';
 
+const HTTP_FORBIDDEN = 403;
+const HTTP_NOT_FOUND = 404;
+
+const REVIEW_DECISION_STATES: ReadonlySet<string> = new Set([
+  'CHANGES_REQUESTED',
+  'APPROVED',
+  'DISMISSED',
+]);
+
+const NON_ACTIONABLE_REVIEW_STATES: ReadonlySet<string> = new Set([
+  'APPROVED',
+  'DISMISSED',
+]);
+
+function getHttpStatus(err: unknown) {
+  if (typeof err !== 'object' || err === null || !('status' in err)) {
+    return undefined;
+  }
+  const code = Number(err.status);
+  return Number.isFinite(code) ? code : undefined;
+}
+
+function isNotFoundError(err: unknown) {
+  return getHttpStatus(err) === HTTP_NOT_FOUND;
+}
+
+function hasNonEmptyBody(r: { readonly body?: string | null }): r is { readonly body: string } {
+  return Boolean(r.body && r.body.trim().length > 0);
+}
+
+export function isUnresolvedThreadWithComments(t: PrReviewThread) {
+  return !t.isResolved && t.comments.length > 0;
+}
+
+function toIssueState(rawState: string) {
+  return rawState.toLowerCase() === 'closed' ? ('closed' as const) : ('open' as const);
+}
+
 function toGitHubError(context: string, err: unknown) {
-  const status =
-    typeof err === 'object' && err !== null && 'status' in err
-      ? Number(err.status)
-      : undefined;
+  const status = getHttpStatus(err);
   const message = err instanceof Error ? err.message : String(err);
   return {
     type: 'GITHUB_API_ERROR',
     message: isoMessage.wrap(`${context}: ${message}`),
-    status: status !== undefined && Number.isFinite(status) ? O.some(isoCount.wrap(status)) : O.none,
-    cause: O.some(isoMessage.wrap(message)),
+    httpStatus:
+      status !== undefined
+        ? ({ kind: 'known', code: isoCount.wrap(status) } as const)
+        : ({ kind: 'unknown' } as const),
+    cause: { kind: 'present', detail: isoMessage.wrap(message) } as const,
   } satisfies DomainError;
 }
 
-type RawGitHubIssue = {
+type RawIssueText = Pick<CreateIssueInput, 'title'> & {
+  body?: string | null;
+};
+
+type RawGitHubIssue = RawIssueText & {
   number: number;
   id: number;
-  title: string;
-  body?: string | null;
   state: string;
   labels: ReadonlyArray<string | { name?: string }>;
   updated_at: string;
@@ -69,14 +108,34 @@ type GraphQLIssueFieldValueNode = {
   };
 };
 
-type GraphQLIssueNode = {
+type GraphQLIssueNode = RawIssueText & {
   number: number;
-  title: string;
-  body: string | null;
   state: 'OPEN' | 'CLOSED';
   updatedAt: string;
   labels: { nodes: ReadonlyArray<{ name: string }> };
   issueFieldValues?: { nodes: ReadonlyArray<GraphQLIssueFieldValueNode> };
+};
+
+type GraphQLReviewCommentNode = {
+  readonly id?: string;
+  readonly databaseId?: number | null;
+  readonly path?: string | null;
+  readonly line?: number | null;
+  readonly originalLine?: number | null;
+  readonly body: string;
+  readonly author?: { readonly login?: string | null } | null;
+};
+
+type GraphQLReviewThreadNode = {
+  readonly id?: string;
+  readonly isResolved: boolean;
+  readonly isOutdated: boolean;
+  readonly path?: string;
+  readonly line?: number | null;
+  readonly originalLine?: number | null;
+  readonly comments: {
+    readonly nodes: ReadonlyArray<GraphQLReviewCommentNode>;
+  };
 };
 
 function extractStatusFieldValueFromGraphQL(
@@ -106,18 +165,22 @@ function mapRawIssue(
 
   return {
     number: isoIssueNumber.wrap(raw.number),
-    title: isoTitle.wrap(raw.title),
-    body: isoBody.wrap(raw.body ?? ''),
-    state: raw.state === 'closed' ? ('closed' as const) : ('open' as const),
+    content: {
+      title: isoTitle.wrap(raw.title),
+      body: isoBody.wrap(raw.body ?? ''),
+      labels,
+    },
+    state: toIssueState(raw.state),
     status: extractStatusFromFieldValue(O.fromNullable(statusValue)),
     type: extractTypeFromLabels(labels),
-    labels,
     subIssueNumbers: subIssueNumbers.map(isoIssueNumber.wrap),
     blockedByNumbers: blockedByNumbers.map(isoIssueNumber.wrap),
     blockingNumbers: blockingNumbers.map(isoIssueNumber.wrap),
-    linkedPrNumber: O.none,
-    parentNumber: O.none,
-    updatedAt: isoIsoTimestamp.wrap(raw.updated_at),
+    links: {
+      linkedPr: { kind: 'none' as const },
+      parent: { kind: 'root' as const },
+    },
+    lastUpdatedAt: isoIsoTimestamp.wrap(raw.updated_at),
   };
 }
 
@@ -163,31 +226,31 @@ function findLastFixCommentTimestamp(issueComments: ReadonlyArray<IssueCommentLi
   return { ms: lastFixAtMs, iso: lastFixIso };
 }
 
-export class OctokitGitHubAdapter implements GitHubPort {
-  private readonly octokit: Octokit;
-  private readonly owner: string;
-  private readonly repo: string;
-  private readonly statusFieldName: string;
-  private cachedStatusField: {
+export type OctokitAdapterOptions = {
+  readonly token: string;
+  readonly owner: string;
+  readonly repo: string;
+  readonly statusFieldName?: string;
+  readonly octokit?: Octokit;
+};
+
+export function createOctokitGitHubAdapter(options: OctokitAdapterOptions) {
+  const octokit = options.octokit ?? new Octokit({ auth: options.token });
+  const issuesApi = octokit.rest.issues;
+  const pullsApi = octokit.rest.pulls;
+  const actionsApi = octokit.rest.actions;
+  const { owner, repo } = options;
+  const repoParams = { owner, repo };
+  const statusFieldName = options.statusFieldName ?? PR_FLOW_STATUS_FIELD_NAME;
+
+  let cachedStatusField: {
     id: string;
     optionsByName: ReadonlyMap<string, string>;
   } | null = null;
 
-  constructor(options: {
-    token: string;
-    owner: string;
-    repo: string;
-    statusFieldName?: string;
-  }) {
-    this.octokit = new Octokit({ auth: options.token });
-    this.owner = options.owner;
-    this.repo = options.repo;
-    this.statusFieldName = options.statusFieldName ?? PR_FLOW_STATUS_FIELD_NAME;
-  }
-
-  private async findStatusFieldViaGraphql() {
-    if (this.cachedStatusField !== null) {
-      return this.cachedStatusField;
+  async function findStatusFieldViaGraphql() {
+    if (cachedStatusField !== null) {
+      return cachedStatusField;
     }
     const query = `
       query ResolveIssueField($owner: String!, $repo: String!) {
@@ -208,7 +271,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
         }
       }
     `;
-    const data = await this.octokit.graphql<{
+    const data = await octokit.graphql<{
       repository: {
         issueFields: {
           nodes: ReadonlyArray<{
@@ -220,36 +283,38 @@ export class OctokitGitHubAdapter implements GitHubPort {
         };
       };
     }>(query, {
-      owner: this.owner,
-      repo: this.repo,
+      owner,
+      repo,
       headers: { 'GraphQL-Features': 'issue_fields' },
     });
 
-    const match = data.repository.issueFields.nodes.find(
-      (f) => f.__typename === 'IssueFieldSingleSelect' && f.name === this.statusFieldName,
+    const repoData = data.repository;
+    const fieldNodes = repoData.issueFields.nodes;
+    const matched = fieldNodes.find(
+      (f) => f.__typename === 'IssueFieldSingleSelect' && f.name === statusFieldName,
     );
-    if (!match || !match.id || !match.options) {
+    if (!matched || !matched.id || !matched.options) {
       return null;
     }
 
-    this.cachedStatusField = {
-      id: match.id,
-      optionsByName: new Map(match.options.map((opt) => [opt.name, opt.id])),
+    cachedStatusField = {
+      id: matched.id,
+      optionsByName: new Map(matched.options.map((opt) => [opt.name, opt.id])),
     };
-    return this.cachedStatusField;
+    return cachedStatusField;
   }
 
-  private async resolveStatusField() {
-    const field = await this.findStatusFieldViaGraphql();
+  async function resolveStatusField() {
+    const field = await findStatusFieldViaGraphql();
     if (!field) {
       throw new Error(
-        `Issue field "${this.statusFieldName}" not found in organization "${this.owner}". Run "pr-flow fields sync --repo ${this.owner}/${this.repo}" with an org-admin token or create it in Organization Settings -> Issue Fields.`,
+        `Issue field "${statusFieldName}" not found in organization "${owner}". Run "pr-flow fields sync --repo ${owner}/${repo}" with an org-admin token or create it in Organization Settings -> Issue Fields.`,
       );
     }
     return field;
   }
 
-  private getIssueStatusFieldValue(issueNumber: number) {
+  function getIssueStatusFieldValue(issueNumber: number) {
     return TE.tryCatch(
       async () => {
         const query = `
@@ -273,36 +338,36 @@ export class OctokitGitHubAdapter implements GitHubPort {
             }
           }
         `;
-        const data = await this.octokit.graphql<{
+        const data = await octokit.graphql<{
           repository: {
             issue: {
               issueFieldValues: { nodes: ReadonlyArray<GraphQLIssueFieldValueNode> };
             } | null;
           };
         }>(query, {
-          owner: this.owner,
-          repo: this.repo,
+          owner,
+          repo,
           number: issueNumber,
           headers: { 'GraphQL-Features': 'issue_fields' },
         });
-        return extractStatusFieldValueFromGraphQL(
-          data.repository.issue?.issueFieldValues.nodes,
-          this.statusFieldName,
-        );
+        const repoData = data.repository;
+        const issueData = repoData.issue;
+        const fieldValues = issueData?.issueFieldValues;
+        return extractStatusFieldValueFromGraphQL(fieldValues?.nodes, statusFieldName);
       },
       (err) => toGitHubError(`Failed to fetch issue field values for #${String(issueNumber)}`, err),
     );
   }
 
-  setIssueStatus(issueNumber: number, status: IssueStatus) {
+  function updateIssueStatus(issueNumber: number, status: IssueStatus) {
     return TE.tryCatch(
       async () => {
-        const { id: fieldId, optionsByName } = await this.resolveStatusField();
+        const { id: fieldId, optionsByName } = await resolveStatusField();
         const optionName = STATUS_TO_FIELD_VALUE[status];
         const singleSelectOptionId = optionsByName.get(optionName);
         if (!singleSelectOptionId) {
           throw new Error(
-            `Option "${optionName}" not found on issue field "${this.statusFieldName}". Run "pr-flow fields sync --repo ${this.owner}/${this.repo}" with an org-admin token.`,
+            `Option "${optionName}" not found on issue field "${statusFieldName}". Run "pr-flow fields sync --repo ${owner}/${repo}" with an org-admin token.`,
           );
         }
 
@@ -315,16 +380,17 @@ export class OctokitGitHubAdapter implements GitHubPort {
             }
           }
         `;
-        const issueData = await this.octokit.graphql<{
+        const issueData = await octokit.graphql<{
           repository: { issue: { id: string } | null };
         }>(issueQuery, {
-          owner: this.owner,
-          repo: this.repo,
+          owner,
+          repo,
           number: issueNumber,
         });
-        const issueId = issueData.repository.issue?.id;
+        const repoData = issueData.repository;
+        const issueId = repoData.issue?.id;
         if (!issueId) {
-          throw new Error(`Issue #${String(issueNumber)} not found in ${this.owner}/${this.repo}.`);
+          throw new Error(`Issue #${String(issueNumber)} not found in ${owner}/${repo}.`);
         }
 
         const mutation = `
@@ -334,7 +400,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
             }
           }
         `;
-        await this.octokit.graphql(mutation, {
+        await octokit.graphql(mutation, {
           input: {
             issueId,
             issueFields: [
@@ -349,31 +415,31 @@ export class OctokitGitHubAdapter implements GitHubPort {
       },
       (err) =>
         toGitHubError(
-          `Failed to set "${this.statusFieldName}" on #${String(issueNumber)} to "${status}"`,
+          `Failed to set "${statusFieldName}" on #${String(issueNumber)} to "${status}"`,
           err,
         ),
     );
   }
 
-  ensureStatusField() {
+  function ensureStatusField() {
     return TE.tryCatch(
       async () => {
-        const existing = await this.findStatusFieldViaGraphql();
+        const existing = await findStatusFieldViaGraphql();
         if (existing) {
           const missing = PR_FLOW_STATUS_OPTIONS.filter(
             (opt) => !existing.optionsByName.has(isoFieldOptionName.unwrap(opt.name)),
           );
           if (missing.length > 0) {
             throw new Error(
-              `Issue field "${this.statusFieldName}" exists in "${this.owner}" but is missing required options: ${missing.map((m) => isoFieldOptionName.unwrap(m.name)).join(', ')}. ` +
-                `Add them at https://github.com/organizations/${this.owner}/settings/issue-fields.`,
+              `Issue field "${statusFieldName}" exists in "${owner}" but is missing required options: ${missing.map((m) => isoFieldOptionName.unwrap(m.name)).join(', ')}. ` +
+                `Add them at https://github.com/organizations/${owner}/settings/issue-fields.`,
             );
           }
           return;
         }
-        await this.octokit.request('POST /orgs/{org}/issue-fields', {
-          org: this.owner,
-          name: this.statusFieldName,
+        await octokit.request('POST /orgs/{org}/issue-fields', {
+          org: owner,
+          name: statusFieldName,
           data_type: 'single_select',
           description: 'pr-flow automated Issue-to-PR lifecycle status',
           options: PR_FLOW_STATUS_OPTIONS.map((opt) => ({
@@ -385,27 +451,33 @@ export class OctokitGitHubAdapter implements GitHubPort {
       },
       (err) => {
         const baseErr = toGitHubError(
-          `Failed to ensure "${this.statusFieldName}" issue field in org "${this.owner}"`,
+          `Failed to ensure "${statusFieldName}" issue field in org "${owner}"`,
           err,
         );
-        if (O.isSome(baseErr.status) && isoCount.unwrap(baseErr.status.value) === 403) {
+        if (
+          baseErr.httpStatus.kind === 'known' &&
+          isoCount.unwrap(baseErr.httpStatus.code) === HTTP_FORBIDDEN
+        ) {
           const optionNames = PR_FLOW_STATUS_OPTIONS.map((o) =>
             isoFieldOptionName.unwrap(o.name),
           ).join(', ');
           return {
             ...baseErr,
             message: isoMessage.wrap(
-              `Failed to create "${this.statusFieldName}" issue field in org "${this.owner}" (HTTP 403: token lacks organization-admin permissions to create org-level Issue Fields). ` +
-                `Run \`GITHUB_TOKEN=$(gh auth token) npx --yes github:mye-org/pr-flow#v1 fields sync --repo ${this.owner}/${this.repo}\` with an org-admin token, ` +
-                `or create the single-select field "${this.statusFieldName}" (options: ${optionNames}) at https://github.com/organizations/${this.owner}/settings/issue-fields.`,
+              `Failed to create "${statusFieldName}" issue field in org "${owner}" (HTTP 403: token lacks organization-admin permissions to create org-level Issue Fields). ` +
+                `Run \`GITHUB_TOKEN=$(gh auth token) npx --yes github:mye-org/pr-flow#v1 fields sync --repo ${owner}/${repo}\` with an org-admin token, ` +
+                `or create the single-select field "${statusFieldName}" (options: ${optionNames}) at https://github.com/organizations/${owner}/settings/issue-fields.`,
             ),
           };
         }
-        if (O.isSome(baseErr.status) && isoCount.unwrap(baseErr.status.value) === 404) {
+        if (
+          baseErr.httpStatus.kind === 'known' &&
+          isoCount.unwrap(baseErr.httpStatus.code) === HTTP_NOT_FOUND
+        ) {
           return {
             ...baseErr,
             message: isoMessage.wrap(
-              `Failed to ensure "${this.statusFieldName}" issue field in org "${this.owner}" (HTTP 404: "${this.owner}" may be a personal account rather than a GitHub Organization, or Issue Fields are not enabled).`,
+              `Failed to ensure "${statusFieldName}" issue field in org "${owner}" (HTTP 404: "${owner}" may be a personal account rather than a GitHub Organization, or Issue Fields are not enabled).`,
             ),
           };
         }
@@ -414,24 +486,155 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  getIssue(issueNumber: number) {
+  function listSubIssues(issueNumber: number) {
+    return TE.tryCatch(
+      async () => {
+        try {
+          const data = await paginateRestPages(async (page) => {
+            const res = await octokit.request(
+              'GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues',
+              {
+                ...repoParams,
+                issue_number: issueNumber,
+                per_page: 100,
+                page,
+              },
+            );
+            return res.data;
+          });
+          return data.map((d) => d.number);
+        } catch (err: unknown) {
+          if (isNotFoundError(err)) {
+            return [];
+          }
+          throw err;
+        }
+      },
+      (err) => toGitHubError(`Failed to list sub-issues for #${String(issueNumber)}`, err),
+    );
+  }
+
+  function addSubIssue(parentNumber: number, childNumber: number) {
+    return TE.tryCatch(
+      async () => {
+        const child = await issuesApi.get({
+          ...repoParams,
+          issue_number: childNumber,
+        });
+        await octokit.request(
+          'POST /repos/{owner}/{repo}/issues/{issue_number}/sub_issues',
+          {
+            ...repoParams,
+            issue_number: parentNumber,
+            sub_issue_id: child.data.id,
+          },
+        );
+      },
+      (err) =>
+        toGitHubError(
+          `Failed to link sub-issue #${String(childNumber)} to #${String(parentNumber)}`,
+          err,
+        ),
+    );
+  }
+
+  function listBlockedBy(issueNumber: number) {
+    return TE.tryCatch(
+      async () => {
+        try {
+          const data = await paginateRestPages(async (page) => {
+            const res = await octokit.request(
+              'GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by',
+              {
+                ...repoParams,
+                issue_number: issueNumber,
+                per_page: 100,
+                page,
+              },
+            );
+            return res.data as ReadonlyArray<RawGitHubIssue>;
+          });
+          return data.map((d) => mapRawIssue(d));
+        } catch (err: unknown) {
+          if (isNotFoundError(err)) {
+            return [];
+          }
+          throw err;
+        }
+      },
+      (err) => toGitHubError(`Failed to list blocked_by for #${String(issueNumber)}`, err),
+    );
+  }
+
+  function listBlocking(issueNumber: number) {
+    return TE.tryCatch(
+      async () => {
+        try {
+          const data = await paginateRestPages(async (page) => {
+            const res = await octokit.request(
+              'GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocking',
+              {
+                ...repoParams,
+                issue_number: issueNumber,
+                per_page: 100,
+                page,
+              },
+            );
+            return res.data as ReadonlyArray<{ number: number }>;
+          });
+          return data.map((d) => d.number);
+        } catch (err: unknown) {
+          if (isNotFoundError(err)) {
+            return [];
+          }
+          throw err;
+        }
+      },
+      (err) => toGitHubError(`Failed to list blocking issues for #${String(issueNumber)}`, err),
+    );
+  }
+
+  function addBlockedBy(issueNumber: number, blockerNumber: number) {
+    return TE.tryCatch(
+      async () => {
+        const blocker = await issuesApi.get({
+          ...repoParams,
+          issue_number: blockerNumber,
+        });
+        await octokit.request(
+          'POST /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by',
+          {
+            ...repoParams,
+            issue_number: issueNumber,
+            issue_id: blocker.data.id,
+          },
+        );
+      },
+      (err) =>
+        toGitHubError(
+          `Failed to add blocked_by #${String(blockerNumber)} on #${String(issueNumber)}`,
+          err,
+        ),
+    );
+  }
+
+  function getIssue(issueNumber: number) {
     return pipe(
       TE.tryCatch(
         () =>
-          this.octokit.rest.issues.get({
-            owner: this.owner,
-            repo: this.repo,
+          issuesApi.get({
+            ...repoParams,
             issue_number: issueNumber,
           }),
         (err) => toGitHubError(`Failed to fetch issue #${String(issueNumber)}`, err),
       ),
-      TE.chain((res) =>
+      TE.flatMap((res) =>
         pipe(
           TE.Do,
-          TE.apS('subIssues', this.listSubIssues(issueNumber)),
-          TE.apS('blockedBy', this.listBlockedBy(issueNumber)),
-          TE.apS('blocking', this.listBlocking(issueNumber)),
-          TE.apS('statusValue', this.getIssueStatusFieldValue(issueNumber)),
+          TE.apS('subIssues', listSubIssues(issueNumber)),
+          TE.apS('blockedBy', listBlockedBy(issueNumber)),
+          TE.apS('blocking', listBlocking(issueNumber)),
+          TE.apS('statusValue', getIssueStatusFieldValue(issueNumber)),
           TE.map(({ subIssues, blockedBy, blocking, statusValue }) =>
             mapRawIssue(
               res.data as RawGitHubIssue,
@@ -446,9 +649,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  listAllIssues(
-    state: 'open' | 'closed' | 'all' = 'all',
-  ) {
+  function listAllIssues(state: 'open' | 'closed' | 'all' = 'all') {
     return TE.tryCatch(
       async () => {
         const states = (() => {
@@ -505,42 +706,49 @@ export class OctokitGitHubAdapter implements GitHubPort {
                 nodes: ReadonlyArray<GraphQLIssueNode>;
               };
             };
-          } = await this.octokit.graphql(query, {
-            owner: this.owner,
-            repo: this.repo,
+          } = await octokit.graphql(query, {
+            owner,
+            repo,
             states,
             after,
             headers: { 'GraphQL-Features': 'issue_fields' },
           });
 
-          const pageNodes: ReadonlyArray<IssueNode> = data.repository.issues.nodes.map((node) => {
+          const repoData = data.repository;
+          const issuesPage = repoData.issues;
+          const pageNodes: ReadonlyArray<IssueNode> = issuesPage.nodes.map((node) => {
             const labels = node.labels.nodes.map((l) => isoLabelName.wrap(l.name));
             const statusValue = extractStatusFieldValueFromGraphQL(
               node.issueFieldValues?.nodes,
-              this.statusFieldName,
+              statusFieldName,
             );
             return {
               number: isoIssueNumber.wrap(node.number),
-              title: isoTitle.wrap(node.title),
-              body: isoBody.wrap(node.body ?? ''),
-              state: node.state === 'CLOSED' ? ('closed' as const) : ('open' as const),
+              content: {
+                title: isoTitle.wrap(node.title),
+                body: isoBody.wrap(node.body ?? ''),
+                labels,
+              },
+              state: toIssueState(node.state),
               status: extractStatusFromFieldValue(O.fromNullable(statusValue)),
               type: extractTypeFromLabels(labels),
-              labels,
               subIssueNumbers: [],
               blockedByNumbers: [],
               blockingNumbers: [],
-              linkedPrNumber: O.none,
-              parentNumber: O.none,
-              updatedAt: isoIsoTimestamp.wrap(node.updatedAt),
+              links: {
+                linkedPr: { kind: 'none' },
+                parent: { kind: 'root' },
+              },
+              lastUpdatedAt: isoIsoTimestamp.wrap(node.updatedAt),
             };
           });
           results = [...results, ...pageNodes];
 
-          if (!data.repository.issues.pageInfo.hasNextPage) {
+          const pageInfo = issuesPage.pageInfo;
+          if (!pageInfo.hasNextPage) {
             break;
           }
-          after = data.repository.issues.pageInfo.endCursor;
+          after = pageInfo.endCursor;
         }
 
         return results;
@@ -549,30 +757,27 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  createIssue(
-    input: CreateIssueInput,
-  ) {
+  function createIssue(input: CreateIssueInput) {
     return TE.tryCatch(
       async () => {
-        const res = await this.octokit.rest.issues.create({
-          owner: this.owner,
-          repo: this.repo,
+        const res = await issuesApi.create({
+          ...repoParams,
           title: input.title,
           body: input.body,
           labels: [...input.labels],
         });
-        return { number: res.data.number, url: res.data.html_url };
+        const created = res.data;
+        return { number: created.number, url: created.html_url };
       },
       (err) => toGitHubError(`Failed to create issue "${input.title}"`, err),
     );
   }
 
-  closeIssue(issueNumber: number) {
+  function closeIssue(issueNumber: number) {
     return TE.tryCatch(
       async () => {
-        await this.octokit.rest.issues.update({
-          owner: this.owner,
-          repo: this.repo,
+        await issuesApi.update({
+          ...repoParams,
           issue_number: issueNumber,
           state: 'closed',
         });
@@ -581,12 +786,11 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  reopenIssue(issueNumber: number) {
+  function reopenIssue(issueNumber: number) {
     return TE.tryCatch(
       async () => {
-        await this.octokit.rest.issues.update({
-          owner: this.owner,
-          repo: this.repo,
+        await issuesApi.update({
+          ...repoParams,
           issue_number: issueNumber,
           state: 'open',
         });
@@ -595,13 +799,12 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  addLabels(issueNumber: number, labels: ReadonlyArray<string>) {
+  function addLabels(issueNumber: number, labels: ReadonlyArray<string>) {
     if (labels.length === 0) return TE.right(undefined);
     return TE.tryCatch(
       async () => {
-        await this.octokit.rest.issues.addLabels({
-          owner: this.owner,
-          repo: this.repo,
+        await issuesApi.addLabels({
+          ...repoParams,
           issue_number: issueNumber,
           labels: [...labels],
         });
@@ -610,19 +813,17 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  removeLabel(issueNumber: number, label: string) {
+  function removeLabel(issueNumber: number, label: string) {
     return TE.tryCatch(
       async () => {
         try {
-          await this.octokit.rest.issues.removeLabel({
-            owner: this.owner,
-            repo: this.repo,
+          await issuesApi.removeLabel({
+            ...repoParams,
             issue_number: issueNumber,
             name: label,
           });
         } catch (err: unknown) {
-          // Ignore 404 when label is not currently on the issue
-          if (typeof err === 'object' && err !== null && 'status' in err && (err as { status: number }).status === 404) {
+          if (isNotFoundError(err)) {
             return;
           }
           throw err;
@@ -632,16 +833,11 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  addComment(issueNumber: number, body: string) {
-    return this.addCommentImpl(issueNumber, body);
-  }
-
-  private addCommentImpl(issueNumber: number, body: string) {
+  function addComment(issueNumber: number, body: string) {
     return TE.tryCatch(
       async () => {
-        await this.octokit.rest.issues.createComment({
-          owner: this.owner,
-          repo: this.repo,
+        await issuesApi.createComment({
+          ...repoParams,
           issue_number: issueNumber,
           body,
         });
@@ -650,12 +846,11 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  listIssueComments(issueNumber: number) {
+  function listIssueComments(issueNumber: number) {
     return TE.tryCatch(
       async () => {
-        const comments = await this.octokit.paginate(this.octokit.rest.issues.listComments, {
-          owner: this.owner,
-          repo: this.repo,
+        const comments = await octokit.paginate(issuesApi.listComments, {
+          ...repoParams,
           issue_number: issueNumber,
           per_page: 100,
         });
@@ -665,16 +860,15 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  dispatchWorkflow(
+  function dispatchWorkflow(
     workflowFile: string,
     ref: string,
     inputs: Readonly<Record<string, string>>,
   ) {
     return TE.tryCatch(
       async () => {
-        await this.octokit.rest.actions.createWorkflowDispatch({
-          owner: this.owner,
-          repo: this.repo,
+        await actionsApi.createWorkflowDispatch({
+          ...repoParams,
           workflow_id: workflowFile,
           ref,
           inputs: { ...inputs },
@@ -684,12 +878,11 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  ensureLabels(labels: ReadonlyArray<LabelDefinition>) {
+  function ensureLabels(labels: ReadonlyArray<LabelDefinition>) {
     return TE.tryCatch(
       async () => {
-        const existing = await this.octokit.paginate(this.octokit.rest.issues.listLabelsForRepo, {
-          owner: this.owner,
-          repo: this.repo,
+        const existing = await octokit.paginate(issuesApi.listLabelsForRepo, {
+          ...repoParams,
           per_page: 100,
         });
         const existingByName = new Map(existing.map((l) => [l.name, l]));
@@ -700,17 +893,15 @@ export class OctokitGitHubAdapter implements GitHubPort {
           const description = isoMessage.unwrap(label.description);
           const current = existingByName.get(name);
           if (!current) {
-            await this.octokit.rest.issues.createLabel({
-              owner: this.owner,
-              repo: this.repo,
+            await issuesApi.createLabel({
+              ...repoParams,
               name,
               color,
               description,
             });
           } else if (current.color.toLowerCase() !== color.toLowerCase()) {
-            await this.octokit.rest.issues.updateLabel({
-              owner: this.owner,
-              repo: this.repo,
+            await issuesApi.updateLabel({
+              ...repoParams,
               name,
               color,
               description,
@@ -722,208 +913,71 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  listSubIssues(issueNumber: number) {
+  function getPullRequest(prNumber: number) {
     return TE.tryCatch(
       async () => {
-        try {
-          const data = await paginateRestPages(async (page) => {
-            const res = await this.octokit.request(
-              'GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues',
-              {
-                owner: this.owner,
-                repo: this.repo,
-                issue_number: issueNumber,
-                per_page: 100,
-                page,
-              },
-            );
-            return res.data;
-          });
-          return data.map((d) => d.number);
-        } catch (err: unknown) {
-          if (typeof err === 'object' && err !== null && 'status' in err && (err as { status: number }).status === 404) {
-            return [];
-          }
-          throw err;
-        }
-      },
-      (err) => toGitHubError(`Failed to list sub-issues for #${String(issueNumber)}`, err),
-    );
-  }
-
-  addSubIssue(parentNumber: number, childNumber: number) {
-    return TE.tryCatch(
-      async () => {
-        const child = await this.octokit.rest.issues.get({
-          owner: this.owner,
-          repo: this.repo,
-          issue_number: childNumber,
-        });
-        await this.octokit.request(
-          'POST /repos/{owner}/{repo}/issues/{issue_number}/sub_issues',
-          {
-            owner: this.owner,
-            repo: this.repo,
-            issue_number: parentNumber,
-            sub_issue_id: child.data.id,
-          },
-        );
-      },
-      (err) =>
-        toGitHubError(
-          `Failed to link sub-issue #${String(childNumber)} to #${String(parentNumber)}`,
-          err,
-        ),
-    );
-  }
-
-  listBlockedBy(issueNumber: number) {
-    return TE.tryCatch(
-      async () => {
-        try {
-          const data = await paginateRestPages(async (page) => {
-            const res = await this.octokit.request(
-              'GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by',
-              {
-                owner: this.owner,
-                repo: this.repo,
-                issue_number: issueNumber,
-                per_page: 100,
-                page,
-              },
-            );
-            return res.data as ReadonlyArray<RawGitHubIssue>;
-          });
-          return data.map((d) => mapRawIssue(d));
-        } catch (err: unknown) {
-          if (typeof err === 'object' && err !== null && 'status' in err && (err as { status: number }).status === 404) {
-            return [];
-          }
-          throw err;
-        }
-      },
-      (err) => toGitHubError(`Failed to list blocked_by for #${String(issueNumber)}`, err),
-    );
-  }
-
-  listBlocking(issueNumber: number) {
-    return TE.tryCatch(
-      async () => {
-        try {
-          const data = await paginateRestPages(async (page) => {
-            const res = await this.octokit.request(
-              'GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocking',
-              {
-                owner: this.owner,
-                repo: this.repo,
-                issue_number: issueNumber,
-                per_page: 100,
-                page,
-              },
-            );
-            return res.data as ReadonlyArray<{ number: number }>;
-          });
-          return data.map((d) => d.number);
-        } catch (err: unknown) {
-          if (typeof err === 'object' && err !== null && 'status' in err && (err as { status: number }).status === 404) {
-            return [];
-          }
-          throw err;
-        }
-      },
-      (err) => toGitHubError(`Failed to list blocking issues for #${String(issueNumber)}`, err),
-    );
-  }
-
-  addBlockedBy(issueNumber: number, blockerNumber: number) {
-    return TE.tryCatch(
-      async () => {
-        const blocker = await this.octokit.rest.issues.get({
-          owner: this.owner,
-          repo: this.repo,
-          issue_number: blockerNumber,
-        });
-        await this.octokit.request(
-          'POST /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by',
-          {
-            owner: this.owner,
-            repo: this.repo,
-            issue_number: issueNumber,
-            issue_id: blocker.data.id,
-          },
-        );
-      },
-      (err) =>
-        toGitHubError(
-          `Failed to add blocked_by #${String(blockerNumber)} on #${String(issueNumber)}`,
-          err,
-        ),
-    );
-  }
-
-  getPullRequest(prNumber: number) {
-    return TE.tryCatch(
-      async () => {
-        const res = await this.octokit.rest.pulls.get({
-          owner: this.owner,
-          repo: this.repo,
+        const res = await pullsApi.get({
+          ...repoParams,
           pull_number: prNumber,
         });
+        const pr = res.data;
+        const head = pr.head;
         return {
-          number: res.data.number,
-          url: res.data.html_url,
-          headRef: res.data.head.ref,
-          state: res.data.state === 'closed' ? ('closed' as const) : ('open' as const),
-          merged: res.data.merged,
+          number: pr.number,
+          url: pr.html_url,
+          headRef: head.ref,
+          state: toIssueState(pr.state),
+          merged: pr.merged,
         };
       },
       (err) => toGitHubError(`Failed to fetch PR #${String(prNumber)}`, err),
     );
   }
 
-  listOpenPrsForIssue(issueNumber: number) {
+  function listOpenPrsForIssue(issueNumber: number) {
     return TE.tryCatch(
       async () => {
         const branch = isoBranchName.unwrap(branchNameForIssue(isoIssueNumber.wrap(issueNumber)));
-        const prs = await this.octokit.rest.pulls.list({
-          owner: this.owner,
-          repo: this.repo,
+        const prs = await pullsApi.list({
+          ...repoParams,
           state: 'open',
-          head: `${this.owner}:${branch}`,
+          head: `${owner}:${branch}`,
         });
-        return prs.data.map((pr) => ({
-          number: pr.number,
-          url: pr.html_url,
-          headRef: pr.head.ref,
-          state: pr.state === 'closed' ? ('closed' as const) : ('open' as const),
-          merged: false,
-        }));
+        return prs.data.map((pr) => {
+          const head = pr.head;
+          return {
+            number: pr.number,
+            url: pr.html_url,
+            headRef: head.ref,
+            state: toIssueState(pr.state),
+            merged: false,
+          };
+        });
       },
       (err) => toGitHubError(`Failed to list open PRs for #${String(issueNumber)}`, err),
     );
   }
 
-  listOpenAiManagedPrs() {
+  function listOpenAiManagedPrs() {
     return TE.tryCatch(
       async () => {
-        const prs = await this.octokit.paginate(this.octokit.rest.pulls.list, {
-          owner: this.owner,
-          repo: this.repo,
+        const prs = await octokit.paginate(pullsApi.list, {
+          ...repoParams,
           state: 'open',
           per_page: 100,
         });
         let results: ReadonlyArray<ManagedPrSummary> = [];
         for (const pr of prs) {
           const hasLabel = pr.labels.some((l) => l.name === 'ai-managed');
-          const match = /^ai\/issue-(\d+)$/.exec(pr.head.ref);
-          if (!hasLabel || !match) continue;
-          const issueNumber = Number(match[1]);
+          const head = pr.head;
+          const matched = /^ai\/issue-(\d+)$/.exec(head.ref);
+          if (!hasLabel || !matched) continue;
+          const issueNumber = Number(matched[1]);
 
           const [reviews, issueComments] = await Promise.all([
             paginateRestPages(async (page) => {
-              const res = await this.octokit.rest.pulls.listReviews({
-                owner: this.owner,
-                repo: this.repo,
+              const res = await pullsApi.listReviews({
+                ...repoParams,
                 pull_number: pr.number,
                 per_page: 100,
                 page,
@@ -931,9 +985,8 @@ export class OctokitGitHubAdapter implements GitHubPort {
               return res.data;
             }),
             paginateRestPages(async (page) => {
-              const res = await this.octokit.rest.issues.listComments({
-                owner: this.owner,
-                repo: this.repo,
+              const res = await issuesApi.listComments({
+                ...repoParams,
                 issue_number: pr.number,
                 per_page: 100,
                 page,
@@ -942,9 +995,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
             }),
           ]);
 
-          const decisive = reviews.filter(
-            (r) => r.state === 'CHANGES_REQUESTED' || r.state === 'APPROVED' || r.state === 'DISMISSED',
-          );
+          const decisive = reviews.filter((r) => REVIEW_DECISION_STATES.has(r.state));
           const latestDecisive = decisive[decisive.length - 1];
           const latestReviewState = latestDecisive?.state ?? null;
           const latestReviewSubmittedAt = latestDecisive?.submitted_at ?? null;
@@ -954,7 +1005,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
             ...results,
             {
               number: pr.number,
-              headRef: pr.head.ref,
+              headRef: head.ref,
               issueNumber,
               updatedAt: pr.updated_at,
               latestReviewState,
@@ -969,47 +1020,44 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  createPullRequest(input: CreatePullRequestInput) {
+  function createPullRequest(input: CreatePullRequestInput) {
+    const content = input.content;
     return TE.tryCatch(
       async () => {
-        const res = await this.octokit.rest.pulls.create({
-          owner: this.owner,
-          repo: this.repo,
-          title: input.title,
-          body: input.body,
+        const res = await pullsApi.create({
+          ...repoParams,
+          title: content.title,
+          body: content.body,
           head: input.head,
           base: input.base,
           ...(input.draft !== undefined ? { draft: input.draft } : {}),
         });
-        if (input.labels && input.labels.length > 0) {
-          await this.octokit.rest.issues.addLabels({
-            owner: this.owner,
-            repo: this.repo,
-            issue_number: res.data.number,
-            labels: [...input.labels],
+        const pr = res.data;
+        if (content.labels.length > 0) {
+          await issuesApi.addLabels({
+            ...repoParams,
+            issue_number: pr.number,
+            labels: [...content.labels],
           });
         }
+        const head = pr.head;
         return {
-          number: res.data.number,
-          url: res.data.html_url,
-          headRef: res.data.head.ref,
-          state: res.data.state === 'closed' ? ('closed' as const) : ('open' as const),
-          merged: res.data.merged,
+          number: pr.number,
+          url: pr.html_url,
+          headRef: head.ref,
+          state: toIssueState(pr.state),
+          merged: pr.merged,
         };
       },
       (err) => toGitHubError(`Failed to create PR for branch ${input.head}`, err),
     );
   }
 
-  mergePullRequest(
-    prNumber: number,
-    method: 'squash' | 'merge' | 'rebase',
-  ) {
+  function mergePullRequest(prNumber: number, method: 'squash' | 'merge' | 'rebase') {
     return TE.tryCatch(
       async () => {
-        await this.octokit.rest.pulls.merge({
-          owner: this.owner,
-          repo: this.repo,
+        await pullsApi.merge({
+          ...repoParams,
           pull_number: prNumber,
           merge_method: method,
         });
@@ -1018,18 +1066,17 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  addPrComment(prNumber: number, body: string) {
-    return this.addComment(prNumber, body);
+  function addPrComment(prNumber: number, body: string) {
+    return addComment(prNumber, body);
   }
 
-  getPrReviewComments(prNumber: number) {
+  function getPrReviewComments(prNumber: number) {
     return TE.tryCatch(
       async () => {
         const [reviews, issueComments] = await Promise.all([
           paginateRestPages(async (page) => {
-            const res = await this.octokit.rest.pulls.listReviews({
-              owner: this.owner,
-              repo: this.repo,
+            const res = await pullsApi.listReviews({
+              ...repoParams,
               pull_number: prNumber,
               per_page: 100,
               page,
@@ -1037,9 +1084,8 @@ export class OctokitGitHubAdapter implements GitHubPort {
             return res.data;
           }),
           paginateRestPages(async (page) => {
-            const res = await this.octokit.rest.issues.listComments({
-              owner: this.owner,
-              repo: this.repo,
+            const res = await issuesApi.listComments({
+              ...repoParams,
               issue_number: prNumber,
               per_page: 100,
               page,
@@ -1052,35 +1098,25 @@ export class OctokitGitHubAdapter implements GitHubPort {
 
         let collected: ReadonlyArray<string> = [];
         for (const r of reviews) {
-          if (!r.body || r.body.trim().length === 0) continue;
-          if (r.state === 'APPROVED' || r.state === 'DISMISSED') continue;
+          if (!hasNonEmptyBody(r)) continue;
+          if (NON_ACTIONABLE_REVIEW_STATES.has(r.state)) continue;
           const submittedMs = r.submitted_at ? Date.parse(r.submitted_at) : Number.NaN;
           if (lastFixAtMs > 0 && !Number.isNaN(submittedMs) && submittedMs <= lastFixAtMs) {
             continue;
           }
-          collected = [...collected, `[Review ${r.state} by ${r.user?.login ?? 'unknown'}]: ${r.body}`];
+          collected = [
+            ...collected,
+            `[Review ${r.state} by ${r.user?.login ?? 'unknown'}]: ${r.body}`,
+          ];
         }
 
-        // Prefer GraphQL reviewThreads so we can skip resolved threads
         let usedGraphqlThreads = false;
         try {
-          const threadData = await this.octokit.graphql<{
+          const threadData = await octokit.graphql<{
             repository: {
               pullRequest: {
                 reviewThreads: {
-                  nodes: ReadonlyArray<{
-                    isResolved: boolean;
-                    isOutdated: boolean;
-                    comments: {
-                      nodes: ReadonlyArray<{
-                        path?: string | null;
-                        line?: number | null;
-                        originalLine?: number | null;
-                        body: string;
-                        author?: { login?: string | null } | null;
-                      }>;
-                    };
-                  }>;
+                  nodes: ReadonlyArray<GraphQLReviewThreadNode>;
                 };
               } | null;
             };
@@ -1110,15 +1146,18 @@ export class OctokitGitHubAdapter implements GitHubPort {
               }
             }
             `,
-            { owner: this.owner, repo: this.repo, number: prNumber },
+            { owner, repo, number: prNumber },
           );
 
-          const threads = threadData.repository.pullRequest?.reviewThreads.nodes;
+          const repoData = threadData.repository;
+          const prData = repoData.pullRequest;
+          const threads = prData?.reviewThreads.nodes;
           if (threads !== undefined) {
             usedGraphqlThreads = true;
             for (const thread of threads) {
               if (thread.isResolved) continue;
-              for (const rc of thread.comments.nodes) {
+              const threadComments = thread.comments;
+              for (const rc of threadComments.nodes) {
                 const loc = `${rc.path ?? '?'}:${String(rc.line ?? rc.originalLine ?? '?')}`;
                 const outdatedTag = thread.isOutdated ? ' (outdated)' : '';
                 collected = [
@@ -1134,9 +1173,8 @@ export class OctokitGitHubAdapter implements GitHubPort {
 
         if (!usedGraphqlThreads) {
           const reviewComments = await paginateRestPages(async (page) => {
-            const res = await this.octokit.rest.pulls.listReviewComments({
-              owner: this.owner,
-              repo: this.repo,
+            const res = await pullsApi.listReviewComments({
+              ...repoParams,
               pull_number: prNumber,
               per_page: 100,
               page,
@@ -1148,9 +1186,10 @@ export class OctokitGitHubAdapter implements GitHubPort {
             if (lastFixAtMs > 0 && !Number.isNaN(createdMs) && createdMs <= lastFixAtMs) {
               continue;
             }
+            const user = rc.user;
             collected = [
               ...collected,
-              `[Inline comment on ${rc.path}:${String(rc.line ?? rc.original_line ?? '?')} by ${rc.user.login}]: ${rc.body}`,
+              `[Inline comment on ${rc.path}:${String(rc.line ?? rc.original_line ?? '?')} by ${user.login}]: ${rc.body}`,
             ];
           }
         }
@@ -1169,7 +1208,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  getPrReviewThreads(prNumber: number) {
+  function getPrReviewThreads(prNumber: number) {
     return TE.tryCatch(
       async () => {
         const query = `
@@ -1215,52 +1254,43 @@ export class OctokitGitHubAdapter implements GitHubPort {
               pullRequest: {
                 reviewThreads: {
                   pageInfo: { hasNextPage: boolean; endCursor: string | null };
-                  nodes: ReadonlyArray<{
-                    id: string;
-                    isResolved: boolean;
-                    isOutdated: boolean;
-                    path: string;
-                    line: number | null;
-                    originalLine: number | null;
-                    comments: {
-                      nodes: ReadonlyArray<{
-                        id: string;
-                        databaseId: number | null;
-                        body: string;
-                        author: { login: string } | null;
-                      }>;
-                    };
-                  }>;
+                  nodes: ReadonlyArray<GraphQLReviewThreadNode>;
                 };
               } | null;
             } | null;
-          } = await this.octokit.graphql(query, {
-            owner: this.owner,
-            repo: this.repo,
+          } = await octokit.graphql(query, {
+            owner,
+            repo,
             prNumber,
             cursor,
           });
 
-          const connection = res.repository?.pullRequest?.reviewThreads;
+          const repoData = res.repository;
+          const prData = repoData?.pullRequest;
+          const connection = prData?.reviewThreads;
           if (!connection) break;
 
-          const pageThreads: ReadonlyArray<PrReviewThread> = connection.nodes.map((node) => ({
-            threadId: node.id,
-            isResolved: node.isResolved,
-            isOutdated: node.isOutdated,
-            path: node.path,
-            line: node.line ?? node.originalLine ?? null,
-            comments: node.comments.nodes.map((c) => ({
-              id: c.id,
-              databaseId: c.databaseId ?? null,
-              author: c.author?.login ?? 'unknown',
-              body: c.body,
-            })),
-          }));
+          const pageThreads: ReadonlyArray<PrReviewThread> = connection.nodes.map((node) => {
+            const nodeComments = node.comments;
+            return {
+              threadId: node.id ?? '',
+              isResolved: node.isResolved,
+              isOutdated: node.isOutdated,
+              path: node.path ?? '',
+              line: node.line ?? node.originalLine ?? null,
+              comments: nodeComments.nodes.map((c) => ({
+                id: c.id ?? '',
+                databaseId: c.databaseId ?? null,
+                author: c.author?.login ?? 'unknown',
+                body: c.body,
+              })),
+            };
+          });
           threads = [...threads, ...pageThreads];
 
-          hasNextPage = connection.pageInfo.hasNextPage;
-          cursor = connection.pageInfo.endCursor;
+          const pageInfo = connection.pageInfo;
+          hasNextPage = pageInfo.hasNextPage;
+          cursor = pageInfo.endCursor;
         }
 
         return threads;
@@ -1269,17 +1299,16 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  getPrReviewFeedback(prNumber: number) {
+  function getPrReviewFeedback(prNumber: number) {
     return pipe(
-      this.getPrReviewThreads(prNumber),
-      TE.chain((allThreads) =>
+      getPrReviewThreads(prNumber),
+      TE.flatMap((allThreads) =>
         TE.tryCatch(
           async () => {
             const [reviews, issueComments] = await Promise.all([
               paginateRestPages(async (page) => {
-                const res = await this.octokit.rest.pulls.listReviews({
-                  owner: this.owner,
-                  repo: this.repo,
+                const res = await pullsApi.listReviews({
+                  ...repoParams,
                   pull_number: prNumber,
                   per_page: 100,
                   page,
@@ -1287,9 +1316,8 @@ export class OctokitGitHubAdapter implements GitHubPort {
                 return res.data;
               }),
               paginateRestPages(async (page) => {
-                const res = await this.octokit.rest.issues.listComments({
-                  owner: this.owner,
-                  repo: this.repo,
+                const res = await issuesApi.listComments({
+                  ...repoParams,
                   issue_number: prNumber,
                   per_page: 100,
                   page,
@@ -1302,8 +1330,8 @@ export class OctokitGitHubAdapter implements GitHubPort {
 
             const reviewTexts: ReadonlyArray<string> = reviews
               .filter((r) => {
-                if (!r.body || r.body.trim().length === 0) return false;
-                if (r.state === 'APPROVED' || r.state === 'DISMISSED') return false;
+                if (!hasNonEmptyBody(r)) return false;
+                if (NON_ACTIONABLE_REVIEW_STATES.has(r.state)) return false;
                 const submittedMs = r.submitted_at ? Date.parse(r.submitted_at) : Number.NaN;
                 if (lastFixAtMs > 0 && !Number.isNaN(submittedMs) && submittedMs <= lastFixAtMs) {
                   return false;
@@ -1324,10 +1352,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
               .map((ic) => `[PR comment by ${ic.user?.login ?? 'unknown'}]: ${ic.body ?? ''}`);
 
             const generalComments: ReadonlyArray<string> = [...reviewTexts, ...issueTexts];
-
-            const unresolvedThreads = allThreads.filter(
-              (t) => !t.isResolved && t.comments.length > 0,
-            );
+            const unresolvedThreads = allThreads.filter(isUnresolvedThreadWithComments);
 
             return {
               unresolvedThreads,
@@ -1340,7 +1365,7 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  replyToReviewThread(threadId: string, body: string) {
+  function replyToReviewThread(threadId: string, body: string) {
     return TE.tryCatch(
       async () => {
         const mutation = `
@@ -1352,13 +1377,13 @@ export class OctokitGitHubAdapter implements GitHubPort {
             }
           }
         `;
-        await this.octokit.graphql(mutation, { threadId, body });
+        await octokit.graphql(mutation, { threadId, body });
       },
       (err) => toGitHubError(`Failed to reply to review thread ${threadId}`, err),
     );
   }
 
-  resolveReviewThread(threadId: string) {
+  function resolveReviewThread(threadId: string) {
     return TE.tryCatch(
       async () => {
         const mutation = `
@@ -1371,13 +1396,13 @@ export class OctokitGitHubAdapter implements GitHubPort {
             }
           }
         `;
-        await this.octokit.graphql(mutation, { threadId });
+        await octokit.graphql(mutation, { threadId });
       },
       (err) => toGitHubError(`Failed to resolve review thread ${threadId}`, err),
     );
   }
 
-  checkSetupPrerequisites(opts: {
+  function checkSetupPrerequisites(opts: {
     prFlowOwner: string;
     expectedLabels?: ReadonlyArray<LabelDefinition>;
     secretName?: string;
@@ -1391,9 +1416,9 @@ export class OctokitGitHubAdapter implements GitHubPort {
         const secretName = opts.secretName ?? 'GEMINI_API_KEY';
 
         // 1. Check pr-flow repository visibility (if target is a different repo)
-        if (`${this.owner}/${this.repo}` !== `${opts.prFlowOwner}/pr-flow`) {
+        if (`${owner}/${repo}` !== `${opts.prFlowOwner}/pr-flow`) {
           try {
-            const res = await this.octokit.request('GET /repos/{owner}/{repo}', {
+            const res = await octokit.request('GET /repos/{owner}/{repo}', {
               owner: opts.prFlowOwner,
               repo: 'pr-flow',
             });
@@ -1401,21 +1426,21 @@ export class OctokitGitHubAdapter implements GitHubPort {
             if (isPrivate) {
               addResult({
                 name: 'pr-flow repository visibility',
-                status: 'warn',
+                outcome: 'warn',
                 message: `Repository "${opts.prFlowOwner}/pr-flow" is private. Consuming repos cannot clone it with their default GITHUB_TOKEN.`,
                 remediation: `Make "${opts.prFlowOwner}/pr-flow" public, or configure a read token for actions/checkout in reusable workflows.`,
               });
             } else {
               addResult({
                 name: 'pr-flow repository visibility',
-                status: 'pass',
+                outcome: 'pass',
                 message: `"${opts.prFlowOwner}/pr-flow" is public and accessible to consuming workflows.`,
               });
             }
           } catch {
             addResult({
               name: 'pr-flow repository visibility',
-              status: 'warn',
+              outcome: 'warn',
               message: `Could not verify visibility of "${opts.prFlowOwner}/pr-flow".`,
             });
           }
@@ -1423,9 +1448,9 @@ export class OctokitGitHubAdapter implements GitHubPort {
 
         // 2. Check GitHub Actions workflow PR permissions on target repo
         try {
-          const wfPerms = await this.octokit.request(
+          const wfPerms = await octokit.request(
             'GET /repos/{owner}/{repo}/actions/permissions/workflow',
-            { owner: this.owner, repo: this.repo },
+            repoParams,
           );
           const canCreatePr = Boolean(
             (wfPerms.data as { can_approve_pull_request_reviews?: boolean })
@@ -1434,35 +1459,35 @@ export class OctokitGitHubAdapter implements GitHubPort {
           if (canCreatePr) {
             addResult({
               name: 'Actions PR permissions',
-              status: 'pass',
-              message: `GitHub Actions is permitted to create and approve pull requests on "${this.owner}/${this.repo}".`,
+              outcome: 'pass',
+              message: `GitHub Actions is permitted to create and approve pull requests on "${owner}/${repo}".`,
             });
           } else {
             addResult({
               name: 'Actions PR permissions',
-              status: 'fail',
-              message: `GitHub Actions is NOT permitted to create or approve pull requests on "${this.owner}/${this.repo}" (finalize will fail with HTTP 403).`,
-              remediation: `Enable "Allow GitHub Actions to create and approve pull requests" at https://github.com/${this.owner}/${this.repo}/settings/actions (or run: gh api -X PUT repos/${this.owner}/${this.repo}/actions/permissions/workflow -F can_approve_pull_request_reviews=true).`,
+              outcome: 'fail',
+              message: `GitHub Actions is NOT permitted to create or approve pull requests on "${owner}/${repo}" (finalize will fail with HTTP 403).`,
+              remediation: `Enable "Allow GitHub Actions to create and approve pull requests" at https://github.com/${owner}/${repo}/settings/actions (or run: gh api -X PUT repos/${owner}/${repo}/actions/permissions/workflow -F can_approve_pull_request_reviews=true).`,
             });
           }
         } catch {
           addResult({
             name: 'Actions PR permissions',
-            status: 'warn',
+            outcome: 'warn',
             message: `Could not inspect Actions workflow permissions (token may lack administration:read).`,
-            remediation: `Verify "Allow GitHub Actions to create and approve pull requests" is enabled at https://github.com/${this.owner}/${this.repo}/settings/actions.`,
+            remediation: `Verify "Allow GitHub Actions to create and approve pull requests" is enabled at https://github.com/${owner}/${repo}/settings/actions.`,
           });
         }
 
         // 3. Check pr-flow-status Issue Field via GraphQL
         try {
-          const field = await this.findStatusFieldViaGraphql();
+          const field = await findStatusFieldViaGraphql();
           if (!field) {
             addResult({
-              name: `${this.statusFieldName} Issue Field`,
-              status: 'fail',
-              message: `Issue Field "${this.statusFieldName}" was not found on "${this.owner}/${this.repo}".`,
-              remediation: `Run \`GITHUB_TOKEN=$(gh auth token) npx --yes github:${opts.prFlowOwner}/pr-flow#v1 fields sync --repo ${this.owner}/${this.repo}\` with an org-admin token, or create it at https://github.com/organizations/${this.owner}/settings/issue-fields.`,
+              name: `${statusFieldName} Issue Field`,
+              outcome: 'fail',
+              message: `Issue Field "${statusFieldName}" was not found on "${owner}/${repo}".`,
+              remediation: `Run \`GITHUB_TOKEN=$(gh auth token) npx --yes github:${opts.prFlowOwner}/pr-flow#v1 fields sync --repo ${owner}/${repo}\` with an org-admin token, or create it at https://github.com/organizations/${owner}/settings/issue-fields.`,
             });
           } else {
             const missingOpts = PR_FLOW_STATUS_OPTIONS.filter(
@@ -1470,24 +1495,24 @@ export class OctokitGitHubAdapter implements GitHubPort {
             );
             if (missingOpts.length > 0) {
               addResult({
-                name: `${this.statusFieldName} Issue Field`,
-                status: 'fail',
-                message: `Issue Field "${this.statusFieldName}" is missing options: ${missingOpts.map((m) => isoFieldOptionName.unwrap(m.name)).join(', ')}.`,
-                remediation: `Add missing options at https://github.com/organizations/${this.owner}/settings/issue-fields.`,
+                name: `${statusFieldName} Issue Field`,
+                outcome: 'fail',
+                message: `Issue Field "${statusFieldName}" is missing options: ${missingOpts.map((m) => isoFieldOptionName.unwrap(m.name)).join(', ')}.`,
+                remediation: `Add missing options at https://github.com/organizations/${owner}/settings/issue-fields.`,
               });
             } else {
               addResult({
-                name: `${this.statusFieldName} Issue Field`,
-                status: 'pass',
-                message: `Issue Field "${this.statusFieldName}" is configured with all ${String(PR_FLOW_STATUS_OPTIONS.length)} status options.`,
+                name: `${statusFieldName} Issue Field`,
+                outcome: 'pass',
+                message: `Issue Field "${statusFieldName}" is configured with all ${String(PR_FLOW_STATUS_OPTIONS.length)} status options.`,
               });
             }
           }
         } catch (err) {
           addResult({
-            name: `${this.statusFieldName} Issue Field`,
-            status: 'warn',
-            message: `Could not query "${this.statusFieldName}" via GraphQL: ${err instanceof Error ? err.message : String(err)}`,
+            name: `${statusFieldName} Issue Field`,
+            outcome: 'warn',
+            message: `Could not query "${statusFieldName}" via GraphQL: ${err instanceof Error ? err.message : String(err)}`,
           });
         }
 
@@ -1495,9 +1520,8 @@ export class OctokitGitHubAdapter implements GitHubPort {
         if (opts.expectedLabels && opts.expectedLabels.length > 0) {
           try {
             const existing = await paginateRestPages(async (page) => {
-              const res = await this.octokit.request('GET /repos/{owner}/{repo}/labels', {
-                owner: this.owner,
-                repo: this.repo,
+              const res = await octokit.request('GET /repos/{owner}/{repo}/labels', {
+                ...repoParams,
                 per_page: 100,
                 page,
               });
@@ -1510,79 +1534,72 @@ export class OctokitGitHubAdapter implements GitHubPort {
             if (missingLabels.length > 0) {
               addResult({
                 name: 'Required labels',
-                status: 'fail',
-                message: `Missing labels on "${this.owner}/${this.repo}": ${missingLabels.map((l) => isoLabelName.unwrap(l.name)).join(', ')}.`,
-                remediation: `Run \`GITHUB_TOKEN=$(gh auth token) npx --yes github:${opts.prFlowOwner}/pr-flow#v1 labels sync --repo ${this.owner}/${this.repo}\`.`,
+                outcome: 'fail',
+                message: `Missing labels on "${owner}/${repo}": ${missingLabels.map((l) => isoLabelName.unwrap(l.name)).join(', ')}.`,
+                remediation: `Run \`GITHUB_TOKEN=$(gh auth token) npx --yes github:${opts.prFlowOwner}/pr-flow#v1 labels sync --repo ${owner}/${repo}\`.`,
               });
             } else {
               addResult({
                 name: 'Required labels',
-                status: 'pass',
+                outcome: 'pass',
                 message: `All ${String(opts.expectedLabels.length)} required pr-flow labels exist.`,
               });
             }
           } catch {
             addResult({
               name: 'Required labels',
-              status: 'warn',
-              message: `Could not list labels on "${this.owner}/${this.repo}".`,
+              outcome: 'warn',
+              message: `Could not list labels on "${owner}/${repo}".`,
             });
           }
         }
 
         // 5. Check Actions secret (e.g. GEMINI_API_KEY)
         try {
-          await this.octokit.request('GET /repos/{owner}/{repo}/actions/secrets/{secret_name}', {
-            owner: this.owner,
-            repo: this.repo,
+          await octokit.request('GET /repos/{owner}/{repo}/actions/secrets/{secret_name}', {
+            ...repoParams,
             secret_name: secretName,
           });
           addResult({
             name: `Actions secret (${secretName})`,
-            status: 'pass',
-            message: `Actions secret "${secretName}" is configured on "${this.owner}/${this.repo}".`,
+            outcome: 'pass',
+            message: `Actions secret "${secretName}" is configured on "${owner}/${repo}".`,
           });
         } catch (err) {
-          const status =
-            typeof err === 'object' && err !== null && 'status' in err
-              ? Number((err).status)
-              : undefined;
-          if (status === 404) {
+          if (isNotFoundError(err)) {
             addResult({
               name: `Actions secret (${secretName})`,
-              status: 'fail',
-              message: `Actions secret "${secretName}" is not configured on "${this.owner}/${this.repo}".`,
-              remediation: `Add "${secretName}" at https://github.com/${this.owner}/${this.repo}/settings/secrets/actions (or run: gh secret set ${secretName} --repo ${this.owner}/${this.repo}).`,
+              outcome: 'fail',
+              message: `Actions secret "${secretName}" is not configured on "${owner}/${repo}".`,
+              remediation: `Add "${secretName}" at https://github.com/${owner}/${repo}/settings/secrets/actions (or run: gh secret set ${secretName} --repo ${owner}/${repo}).`,
             });
           } else {
             addResult({
               name: `Actions secret (${secretName})`,
-              status: 'warn',
+              outcome: 'warn',
               message: `Could not inspect Actions secret "${secretName}" (token may lack secrets:read).`,
-              remediation: `Verify "${secretName}" is set at https://github.com/${this.owner}/${this.repo}/settings/secrets/actions.`,
+              remediation: `Verify "${secretName}" is set at https://github.com/${owner}/${repo}/settings/secrets/actions.`,
             });
           }
         }
 
         return results;
       },
-      (err) => toGitHubError(`Failed to run setup preflight checks for ${this.owner}/${this.repo}`, err),
+      (err) => toGitHubError(`Failed to run setup preflight checks for ${owner}/${repo}`, err),
     );
   }
 
-  listPrReviewers(prNumber: number) {
+  function listPrReviewers(prNumber: number) {
     return TE.tryCatch(
       async () => {
         const [prRes, reviews] = await Promise.all([
-          this.octokit.rest.pulls.get({
-            owner: this.owner,
-            repo: this.repo,
+          pullsApi.get({
+            ...repoParams,
             pull_number: prNumber,
           }),
           paginateRestPages(async (page) => {
-            const res = await this.octokit.rest.pulls.listReviews({
-              owner: this.owner,
-              repo: this.repo,
+            const res = await pullsApi.listReviews({
+              ...repoParams,
               pull_number: prNumber,
               per_page: 100,
               page,
@@ -1590,13 +1607,15 @@ export class OctokitGitHubAdapter implements GitHubPort {
             return res.data;
           }),
         ]);
-        const prAuthor = prRes.data.user.login;
+        const prData = prRes.data;
+        const prUser = prData.user;
+        const prAuthor = prUser.login;
         const latestStateByUser = new Map<string, string>();
         for (const r of reviews) {
           if (!r.user) continue;
           const login = r.user.login;
           if (!login || r.user.type === 'Bot' || login === prAuthor) continue;
-          if (r.state === 'CHANGES_REQUESTED' || r.state === 'APPROVED' || r.state === 'DISMISSED') {
+          if (REVIEW_DECISION_STATES.has(r.state)) {
             latestStateByUser.set(login, r.state);
           }
         }
@@ -1608,13 +1627,12 @@ export class OctokitGitHubAdapter implements GitHubPort {
     );
   }
 
-  requestReviewers(prNumber: number, reviewers: ReadonlyArray<string>) {
+  function requestReviewers(prNumber: number, reviewers: ReadonlyArray<string>) {
     return TE.tryCatch(
       async () => {
         if (reviewers.length === 0) return;
-        await this.octokit.rest.pulls.requestReviewers({
-          owner: this.owner,
-          repo: this.repo,
+        await pullsApi.requestReviewers({
+          ...repoParams,
           pull_number: prNumber,
           reviewers: [...reviewers],
         });
@@ -1622,4 +1640,39 @@ export class OctokitGitHubAdapter implements GitHubPort {
       (err) => toGitHubError(`Failed to request reviewers on PR #${String(prNumber)}`, err),
     );
   }
+
+  return {
+    getIssue,
+    listAllIssues,
+    createIssue,
+    closeIssue,
+    reopenIssue,
+    updateIssueStatus,
+    ensureStatusField,
+    addLabels,
+    removeLabel,
+    addComment,
+    listIssueComments,
+    ensureLabels,
+    dispatchWorkflow,
+    listSubIssues,
+    addSubIssue,
+    listBlockedBy,
+    listBlocking,
+    addBlockedBy,
+    getPullRequest,
+    listOpenPrsForIssue,
+    listOpenAiManagedPrs,
+    createPullRequest,
+    mergePullRequest,
+    checkSetupPrerequisites,
+    addPrComment,
+    getPrReviewComments,
+    getPrReviewThreads,
+    getPrReviewFeedback,
+    replyToReviewThread,
+    resolveReviewThread,
+    listPrReviewers,
+    requestReviewers,
+  };
 }

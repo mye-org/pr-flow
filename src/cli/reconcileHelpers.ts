@@ -1,5 +1,5 @@
 import * as E from 'fp-ts/lib/Either';
-import type { GitHubPort, ManagedPrSummary } from '../adapters/github/types.js';
+import type { GitHubEffectsPort, GitHubRollupPort, ManagedPrSummary } from '../adapters/github/types.js';
 import type { DomainError } from '../domain/errors.js';
 import type { IssueNode } from '../domain/issue.js';
 import { isoIssueNumber } from '../domain/newtypes.js';
@@ -18,7 +18,9 @@ export function shouldRetryReviewPr(params: {
   readonly cooldownMs: number;
 }) {
   const { pr, linkedIssue, nowMs, cooldownMs } = params;
-  if (pr.latestReviewState !== 'CHANGES_REQUESTED') return false;
+  if (pr.latestReviewState !== 'CHANGES_REQUESTED' || pr.number <= 0 || pr.issueNumber <= 0) {
+    return false;
+  }
   if (!linkedIssue || linkedIssue.state !== 'open' || linkedIssue.status !== 'review_pending') {
     return false;
   }
@@ -53,7 +55,7 @@ export type RollupSyncResult = {
  */
 export async function recomputeContainerRollups(
   initialByNumber: ReadonlyMap<number, IssueNode>,
-  github: GitHubPort,
+  github: GitHubEffectsPort & GitHubRollupPort,
 ) {
   let byNumber: ReadonlyMap<number, IssueNode> = new Map(initialByNumber);
   const candidates = Array.from(byNumber.values()).filter(

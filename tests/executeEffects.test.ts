@@ -6,7 +6,6 @@
  */
 
 import * as E from 'fp-ts/lib/Either';
-import * as O from 'fp-ts/lib/Option';
 import * as TE from 'fp-ts/lib/TaskEither';
 import { describe, expect, it, vi } from 'vitest';
 import type { GitHubPort } from '../src/adapters/github/types.js';
@@ -27,7 +26,7 @@ const mockGithub = (overrides: Partial<GitHubPort> = {}) => ({
   createIssue: vi.fn(),
   closeIssue: vi.fn(),
   reopenIssue: vi.fn(),
-  setIssueStatus: vi.fn(),
+  updateIssueStatus: vi.fn(),
   ensureStatusField: vi.fn(),
   addLabels: vi.fn(),
   removeLabel: vi.fn(),
@@ -59,7 +58,7 @@ const mockGithub = (overrides: Partial<GitHubPort> = {}) => ({
 
 describe('executeEffect', () => {
   it('handles SET_STATUS_FIELD (with from status)', async () => {
-    const setIssueStatus = vi.fn().mockReturnValue(TE.right(undefined));
+    const updateIssueStatus = vi.fn().mockReturnValue(TE.right(undefined));
 
     expect(
       E.isRight(
@@ -67,18 +66,17 @@ describe('executeEffect', () => {
           {
             type: 'SET_STATUS_FIELD',
             issueNumber: isoIssueNumber.wrap(42),
-            from: O.some('ready'),
-            to: 'in_progress',
+            transition: { kind: 'transition', from: 'ready', to: 'in_progress' },
           },
-          mockGithub({ setIssueStatus }),
+          mockGithub({ updateIssueStatus }),
         )(),
       ),
     ).toBe(true);
-    expect(setIssueStatus).toHaveBeenCalledWith(42, 'in_progress');
+    expect(updateIssueStatus).toHaveBeenCalledWith(42, 'in_progress');
   });
 
   it('handles SET_STATUS_FIELD (without from status)', async () => {
-    const setIssueStatus = vi.fn().mockReturnValue(TE.right(undefined));
+    const updateIssueStatus = vi.fn().mockReturnValue(TE.right(undefined));
 
     expect(
       E.isRight(
@@ -86,14 +84,13 @@ describe('executeEffect', () => {
           {
             type: 'SET_STATUS_FIELD',
             issueNumber: isoIssueNumber.wrap(42),
-            from: O.none,
-            to: 'ready',
+            transition: { kind: 'initial', to: 'ready' },
           },
-          mockGithub({ setIssueStatus }),
+          mockGithub({ updateIssueStatus }),
         )(),
       ),
     ).toBe(true);
-    expect(setIssueStatus).toHaveBeenCalledWith(42, 'ready');
+    expect(updateIssueStatus).toHaveBeenCalledWith(42, 'ready');
   });
 
   it('handles ADD_COMMENT', async () => {
@@ -159,22 +156,28 @@ describe('executeEffect', () => {
           {
             type: 'CREATE_PR',
             issueNumber: isoIssueNumber.wrap(42),
-            branch: isoBranchName.wrap('ai/issue-42'),
-            baseBranch: isoBranchName.wrap('main'),
-            title: isoTitle.wrap('Implement auth'),
-            body: isoBody.wrap('Closes #42'),
-            labels: [isoLabelName.wrap('ai-generated')],
+            draft: {
+              branch: isoBranchName.wrap('ai/issue-42'),
+              baseBranch: isoBranchName.wrap('main'),
+              content: {
+                title: isoTitle.wrap('Implement auth'),
+                body: isoBody.wrap('Closes #42'),
+                labels: [isoLabelName.wrap('ai-generated')],
+              },
+            },
           },
           mockGithub({ createPullRequest }),
         )(),
       ),
     ).toBe(true);
     expect(createPullRequest).toHaveBeenCalledWith({
-      title: 'Implement auth',
-      body: 'Closes #42',
+      content: {
+        title: 'Implement auth',
+        body: 'Closes #42',
+        labels: ['ai-generated'],
+      },
       head: 'ai/issue-42',
       base: 'main',
-      labels: ['ai-generated'],
     });
   });
 
@@ -222,8 +225,8 @@ describe('executeEffects', () => {
       TE.left({
         type: 'GITHUB_API_ERROR',
         message: isoMessage.wrap('Failed'),
-        status: O.none,
-        cause: O.none,
+        httpStatus: { kind: 'unknown' },
+        cause: { kind: 'none' },
       }),
     );
     const closeIssue = vi.fn().mockReturnValue(TE.right(undefined));

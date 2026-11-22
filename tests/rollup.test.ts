@@ -1,4 +1,3 @@
-import * as O from 'fp-ts/lib/Option';
 import { describe, expect, it } from 'vitest';
 import { isoIssueNumber } from '../src/domain/newtypes.js';
 import { computeContainerStatus, computeRollupEffects } from '../src/rollup/computeRollup.js';
@@ -43,8 +42,7 @@ describe('computeRollupEffects', () => {
       {
         type: 'SET_STATUS_FIELD',
         issueNumber: isoIssueNumber.wrap(1),
-        from: O.some('in_progress'),
-        to: 'fixed',
+        transition: { kind: 'transition', from: 'in_progress', to: 'fixed' },
       },
       { type: 'CLOSE_ISSUE', issueNumber: isoIssueNumber.wrap(1) },
     ]);
@@ -60,8 +58,7 @@ describe('computeRollupEffects', () => {
       {
         type: 'SET_STATUS_FIELD',
         issueNumber: isoIssueNumber.wrap(1),
-        from: O.some('fixed'),
-        to: 'needs_human',
+        transition: { kind: 'transition', from: 'fixed', to: 'needs_human' },
       },
       { type: 'REOPEN_ISSUE', issueNumber: isoIssueNumber.wrap(1) },
     ]);

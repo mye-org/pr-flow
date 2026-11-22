@@ -1,5 +1,5 @@
 import * as E from 'fp-ts/lib/Either';
-import type { GitHubPort, PrReviewThread } from '../adapters/github/types.js';
+import type { GitHubReviewPort, PrReviewThread } from '../adapters/github/types.js';
 import type { AgentResult } from '../domain/issue.js';
 import { isoMessage } from '../domain/newtypes.js';
 
@@ -10,7 +10,7 @@ export type ReviewFollowUpResult = {
 };
 
 export async function replyAndResolveReviewThreads(params: {
-  readonly github: GitHubPort;
+  readonly github: GitHubReviewPort;
   readonly branch: string;
   readonly agentResult: AgentResult;
   readonly threads: ReadonlyArray<PrReviewThread>;

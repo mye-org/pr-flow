@@ -1,4 +1,3 @@
-import * as O from 'fp-ts/lib/Option';
 import { assign, setup, transition } from 'xstate';
 import type { Effect } from '../domain/effects.js';
 import type { IssueEvent } from '../domain/events.js';
@@ -53,8 +52,7 @@ export const issueMachine = setup({
       effects: appendEffect(context.effects, {
         type: 'SET_STATUS_FIELD',
         issueNumber: context.issueNumber,
-        from: O.some(params.from),
-        to: params.to,
+        transition: { kind: 'transition', from: params.from, to: params.to },
       }),
     })),
     emitComment: assign(({ context }, params: { readonly body: Body }) => ({

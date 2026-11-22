@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as E from 'fp-ts/lib/Either';
 import { pipe } from 'fp-ts/lib/function';
-import * as O from 'fp-ts/lib/Option';
+import { match } from 'ts-pattern';
 import { describe, expect, it } from 'vitest';
 import { buildImplementPrompt, buildReviewPrompt } from '../src/adapters/agent/prompts.js';
 import {
@@ -78,6 +78,7 @@ describe('parseGeminiJsonOutput', () => {
 
   it('returns null for non-JSON output', () => {
     expect(parseGeminiJsonOutput('plain error text')).toBeNull();
+    expect(parseGeminiJsonOutput('')).toBeNull();
   });
 });
 
@@ -112,6 +113,7 @@ describe('extractAgentResultFromText', () => {
 
   it('returns null when JSON does not match AgentResultSchema', () => {
     expect(extractAgentResultFromText('{"foo":"bar"}')).toBeNull();
+    expect(extractAgentResultFromText('plain text')).toBeNull();
   });
 });
 
@@ -206,12 +208,18 @@ describe('runAgentExecution', () => {
       });
 
       expect(E.isRight(res)).toBe(true);
-      if (E.isRight(res)) {
-        expect(res.right.result.status).toBe('needs_human');
-        expect(res.right.result.reason).toBe('Need API spec');
-        expect(res.right.hasChanges).toBe(false);
-        expect(fs.existsSync(res.right.patchPath)).toBe(true);
-      }
+      match(res)
+        .with({ _tag: 'Right' }, ({ right: output }) => {
+          const agentResult = output.result;
+          expect(agentResult.status).toBe('needs_human');
+          expect(agentResult.reason).toBe('Need API spec');
+          expect(output.hasChanges).toBe(false);
+          expect(fs.existsSync(output.patchPath)).toBe(true);
+        })
+        .with({ _tag: 'Left' }, () => {
+          expect.unreachable('Expected Right');
+        })
+        .exhaustive();
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -272,14 +280,19 @@ fi
       });
 
       expect(E.isRight(res)).toBe(true);
-      if (E.isRight(res)) {
-        expect(res.right.result.status).toBe('success');
-        expect(res.right.result.summary).toBe('Fixed lint');
-        expect(res.right.result.resolvedComments).toEqual([{ threadId: 'T1', reply: 'Fixed' }]);
-        expect(res.right.hasChanges).toBe(true);
-        const patch = fs.readFileSync(res.right.patchPath, 'utf-8');
-        expect(patch).toContain('+fixed');
-      }
+      match(res)
+        .with({ _tag: 'Right' }, ({ right: output }) => {
+          const agentResult = output.result;
+          expect(agentResult.status).toBe('success');
+          expect(agentResult.summary).toBe('Fixed lint');
+          expect(agentResult.resolvedComments).toEqual([{ threadId: 'T1', reply: 'Fixed' }]);
+          expect(output.hasChanges).toBe(true);
+          expect(fs.readFileSync(output.patchPath, 'utf-8')).toContain('+fixed');
+        })
+        .with({ _tag: 'Left' }, () => {
+          expect.unreachable('Expected Right');
+        })
+        .exhaustive();
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -334,14 +347,19 @@ printf '{"status":"success","summary":"Partial work","testsRun":true}' > "$PR_FL
       });
 
       expect(E.isRight(res)).toBe(true);
-      if (E.isRight(res)) {
-        expect(res.right.result.status).toBe('failed');
-        expect(res.right.result.reason).toContain('after 1 fix attempt(s)');
-        expect(res.right.result.reason).toContain('lint error');
-        expect(res.right.hasChanges).toBe(true);
-        const patch = fs.readFileSync(res.right.patchPath, 'utf-8');
-        expect(patch).toContain('+partial-wip');
-      }
+      match(res)
+        .with({ _tag: 'Right' }, ({ right: output }) => {
+          const agentResult = output.result;
+          expect(agentResult.status).toBe('failed');
+          expect(agentResult.reason).toContain('after 1 fix attempt(s)');
+          expect(agentResult.reason).toContain('lint error');
+          expect(output.hasChanges).toBe(true);
+          expect(fs.readFileSync(output.patchPath, 'utf-8')).toContain('+partial-wip');
+        })
+        .with({ _tag: 'Left' }, () => {
+          expect.unreachable('Expected Right');
+        })
+        .exhaustive();
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -359,26 +377,32 @@ describe('computeAttemptTimeoutMs', () => {
 describe('prompt construction', () => {
   const sampleIssue: IssueNode = {
     number: isoIssueNumber.wrap(42),
-    title: isoTitle.wrap('Optimize agent tokens'),
-    body: isoBody.wrap('Reduce unnecessary round-trips.'),
+    content: {
+      title: isoTitle.wrap('Optimize agent tokens'),
+      body: isoBody.wrap('Reduce unnecessary round-trips.'),
+      labels: [isoLabelName.wrap('type:task'), isoLabelName.wrap('ai-managed')],
+    },
     state: 'open',
     status: 'in_progress',
     type: 'task',
-    labels: [isoLabelName.wrap('type:task'), isoLabelName.wrap('ai-managed')],
     subIssueNumbers: [],
     blockedByNumbers: [],
     blockingNumbers: [],
-    linkedPrNumber: O.none,
-    parentNumber: O.none,
-    updatedAt: isoIsoTimestamp.wrap('2026-11-21T00:00:00Z'),
+    links: {
+      linkedPr: { kind: 'none' },
+      parent: { kind: 'root' },
+    },
+    lastUpdatedAt: isoIsoTimestamp.wrap('2026-11-21T00:00:00Z'),
   };
 
   it('places static instructions before dynamic issue and repo file tree for prefix caching', () => {
     const prompt = buildImplementPrompt({
       issue: sampleIssue,
-      verifyCommand: 'npm test',
+      execution: {
+        verifyCommand: 'npm test',
+        resultFilePath: '/tmp/result.json',
+      },
       agentsMd: 'Keep code clean.',
-      resultFilePath: '/tmp/result.json',
       repoFiles: ['src/index.ts', 'tests/index.test.ts'],
     });
     expect(prompt.indexOf('## Repository Instructions (AGENTS.md)')).toBeLessThan(
@@ -395,8 +419,10 @@ describe('prompt construction', () => {
       issue: sampleIssue,
       prNumber: 99,
       reviewComments: ['[Review CHANGES_REQUESTED]: Please add a test.'],
-      verifyCommand: 'npm test',
-      resultFilePath: '/tmp/result.json',
+      execution: {
+        verifyCommand: 'npm test',
+        resultFilePath: '/tmp/result.json',
+      },
       changedFiles: ['src/a.ts'],
       prDiff: 'diff --git a/src/a.ts b/src/a.ts',
     });

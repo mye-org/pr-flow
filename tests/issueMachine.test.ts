@@ -1,7 +1,7 @@
 import * as E from 'fp-ts/lib/Either';
 import { pipe } from 'fp-ts/lib/function';
-import * as O from 'fp-ts/lib/Option';
 import * as RA from 'fp-ts/lib/ReadonlyArray';
+import { match } from 'ts-pattern';
 import { describe, expect, it } from 'vitest';
 import { isExecutableLeaf, type IssueNode } from '../src/domain/issue.js';
 import {
@@ -21,18 +21,22 @@ import { transitionIssue } from '../src/machine/issueMachine.js';
 function makeIssue(overrides: Partial<IssueNode> = {}) {
   return {
     number: isoIssueNumber.wrap(42),
-    title: isoTitle.wrap('Implement auth middleware'),
-    body: isoBody.wrap('Add JWT verification'),
+    content: {
+      title: isoTitle.wrap('Implement auth middleware'),
+      body: isoBody.wrap('Add JWT verification'),
+      labels: [isoLabelName.wrap('type:task'), isoLabelName.wrap('ai-managed')],
+    },
     state: 'open' as const,
     status: 'ready' as const,
     type: 'task' as const,
-    labels: [isoLabelName.wrap('type:task'), isoLabelName.wrap('ai-managed')],
     subIssueNumbers: [],
     blockedByNumbers: [],
     blockingNumbers: [],
-    linkedPrNumber: O.none,
-    parentNumber: O.none,
-    updatedAt: isoIsoTimestamp.wrap('2026-11-20T00:00:00Z'),
+    links: {
+      linkedPr: { kind: 'none' },
+      parent: { kind: 'root' },
+    },
+    lastUpdatedAt: isoIsoTimestamp.wrap('2026-11-20T00:00:00Z'),
     ...overrides,
   } satisfies IssueNode;
 }
@@ -114,9 +118,14 @@ describe('checkPickupEligibility', () => {
       blockingIssues: [],
     });
     expect(E.isLeft(res)).toBe(true);
-    if (E.isLeft(res)) {
-      expect(res.left.type).toBe('NOT_AN_EXECUTABLE_LEAF');
-    }
+    match(res)
+      .with({ _tag: 'Left' }, ({ left }) => {
+        expect(left.type).toBe('NOT_AN_EXECUTABLE_LEAF');
+      })
+      .with({ _tag: 'Right' }, () => {
+        expect.unreachable('Expected Left');
+      })
+      .exhaustive();
   });
 
   it('blocks pickup when upstream dependencies are open', () => {
@@ -154,8 +163,7 @@ describe('issueMachine transitions', () => {
       {
         type: 'SET_STATUS_FIELD',
         issueNumber: isoIssueNumber.wrap(42),
-        from: O.some('ready'),
-        to: 'in_progress',
+        transition: { kind: 'transition', from: 'ready', to: 'in_progress' },
       },
     ]);
 
@@ -169,8 +177,7 @@ describe('issueMachine transitions', () => {
     expect(prOpened.effects[0]).toEqual({
       type: 'SET_STATUS_FIELD',
       issueNumber: isoIssueNumber.wrap(42),
-      from: O.some('in_progress'),
-      to: 'review_pending',
+      transition: { kind: 'transition', from: 'in_progress', to: 'review_pending' },
     });
 
     const merged = transitionIssue(makeIssue({ status: 'review_pending' }), {
@@ -182,8 +189,7 @@ describe('issueMachine transitions', () => {
       {
         type: 'SET_STATUS_FIELD',
         issueNumber: isoIssueNumber.wrap(42),
-        from: O.some('review_pending'),
-        to: 'fixed',
+        transition: { kind: 'transition', from: 'review_pending', to: 'fixed' },
       },
       { type: 'CLOSE_ISSUE', issueNumber: isoIssueNumber.wrap(42) },
     ]);
@@ -222,14 +228,17 @@ describe('issueMachine transitions', () => {
     expect(res.effects[0]).toEqual({
       type: 'SET_STATUS_FIELD',
       issueNumber: isoIssueNumber.wrap(42),
-      from: O.some('in_progress'),
-      to: 'ready',
+      transition: { kind: 'transition', from: 'in_progress', to: 'ready' },
     });
     const commentEffect = res.effects[1];
     expect(commentEffect?.type).toBe('ADD_COMMENT');
-    if (commentEffect?.type === 'ADD_COMMENT') {
-      expect(isoBody.unwrap(commentEffect.body)).toContain('<!-- pr-flow:retries=2 -->');
-    }
+    match(commentEffect)
+      .with({ type: 'ADD_COMMENT' }, (ce) => {
+        expect(isoBody.unwrap(ce.body)).toContain('<!-- pr-flow:retries=2 -->');
+      })
+      .otherwise(() => {
+        expect.unreachable('Expected ADD_COMMENT effect');
+      });
   });
 
   it('escalates in_progress -> needs_human on TRANSIENT_EXECUTION_FAILED when retries exhausted', () => {
@@ -243,8 +252,7 @@ describe('issueMachine transitions', () => {
     expect(res.effects[0]).toEqual({
       type: 'SET_STATUS_FIELD',
       issueNumber: isoIssueNumber.wrap(42),
-      from: O.some('in_progress'),
-      to: 'needs_human',
+      transition: { kind: 'transition', from: 'in_progress', to: 'needs_human' },
     });
   });
 
@@ -258,8 +266,7 @@ describe('issueMachine transitions', () => {
     expect(res.effects[0]).toEqual({
       type: 'SET_STATUS_FIELD',
       issueNumber: isoIssueNumber.wrap(42),
-      from: O.some('review_pending'),
-      to: 'needs_human',
+      transition: { kind: 'transition', from: 'review_pending', to: 'needs_human' },
     });
     expect(
       pipe(
@@ -279,8 +286,7 @@ describe('issueMachine transitions', () => {
       {
         type: 'SET_STATUS_FIELD',
         issueNumber: isoIssueNumber.wrap(42),
-        from: O.some('in_progress'),
-        to: 'fixed',
+        transition: { kind: 'transition', from: 'in_progress', to: 'fixed' },
       },
       { type: 'CLOSE_ISSUE', issueNumber: isoIssueNumber.wrap(42) },
     ]);
@@ -293,8 +299,7 @@ describe('issueMachine transitions', () => {
     expect(fromNeedsHuman.effects[0]).toEqual({
       type: 'SET_STATUS_FIELD',
       issueNumber: isoIssueNumber.wrap(42),
-      from: O.some('needs_human'),
-      to: 'fixed',
+      transition: { kind: 'transition', from: 'needs_human', to: 'fixed' },
     });
   });
 });

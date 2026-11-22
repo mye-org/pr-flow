@@ -1,6 +1,7 @@
 import { pipe } from 'fp-ts/lib/function';
 import * as O from 'fp-ts/lib/Option';
 import * as RA from 'fp-ts/lib/ReadonlyArray';
+import * as RR from 'fp-ts/lib/ReadonlyRecord';
 import { match } from 'ts-pattern';
 import { z } from 'zod';
 import {
@@ -47,8 +48,8 @@ export const STATUS_TO_FIELD_VALUE: Readonly<Record<IssueStatus, string>> = {
 
 export const FIELD_VALUE_TO_STATUS: Readonly<Record<string, IssueStatus>> = Object.fromEntries(
   pipe(
-    Object.entries(STATUS_TO_FIELD_VALUE),
-    RA.map(([status, value]) => [value, status as IssueStatus] as const),
+    RR.toEntries(STATUS_TO_FIELD_VALUE),
+    RA.map(([status, value]) => [value, status] as const),
   ),
 );
 
@@ -58,7 +59,7 @@ export type IssueFieldOptionDefinition = {
   readonly description: Message;
 };
 
-export const PR_FLOW_STATUS_OPTIONS: ReadonlyArray<IssueFieldOptionDefinition> = [
+export const PR_FLOW_STATUS_OPTIONS = [
   {
     name: isoFieldOptionName.wrap('backlog'),
     color: isoHexColor.wrap('GRAY'),
@@ -94,7 +95,7 @@ export const PR_FLOW_STATUS_OPTIONS: ReadonlyArray<IssueFieldOptionDefinition> =
     color: isoHexColor.wrap('RED'),
     description: isoMessage.wrap('Requires human intervention or clarification'),
   },
-];
+] as const satisfies ReadonlyArray<IssueFieldOptionDefinition>;
 
 export const TYPE_TO_LABEL: Readonly<Record<IssueType, LabelName>> = {
   epic: isoLabelName.wrap('type:epic'),
@@ -105,8 +106,8 @@ export const TYPE_TO_LABEL: Readonly<Record<IssueType, LabelName>> = {
 
 export const LABEL_TO_TYPE: Readonly<Record<string, IssueType>> = Object.fromEntries(
   pipe(
-    Object.entries(TYPE_TO_LABEL),
-    RA.map(([type, label]) => [isoLabelName.unwrap(label), type as IssueType] as const),
+    RR.toEntries(TYPE_TO_LABEL),
+    RA.map(([type, label]) => [isoLabelName.unwrap(label), type] as const),
   ),
 );
 
@@ -116,7 +117,7 @@ export type LabelDefinition = {
   readonly description: Message;
 };
 
-export const DEFAULT_LABELS: ReadonlyArray<LabelDefinition> = [
+export const DEFAULT_LABELS = [
   {
     name: isoLabelName.wrap('type:epic'),
     color: isoHexColor.wrap('3e4b9e'),
@@ -142,22 +143,38 @@ export const DEFAULT_LABELS: ReadonlyArray<LabelDefinition> = [
     color: isoHexColor.wrap('0052cc'),
     description: isoMessage.wrap('Managed by pr-flow automation'),
   },
-];
+] as const satisfies ReadonlyArray<LabelDefinition>;
+
+export type IssueContent = {
+  readonly title: Title;
+  readonly body: Body;
+  readonly labels: ReadonlyArray<LabelName>;
+};
+
+export type LinkedPrRef =
+  | { readonly kind: 'linked'; readonly prNumber: PrNumber }
+  | { readonly kind: 'none' };
+
+export type ParentIssueRef =
+  | { readonly kind: 'child'; readonly parentNumber: IssueNumber }
+  | { readonly kind: 'root' };
+
+export type IssueLinks = {
+  readonly linkedPr: LinkedPrRef;
+  readonly parent: ParentIssueRef;
+};
 
 export type IssueNode = {
   readonly number: IssueNumber;
-  readonly title: Title;
-  readonly body: Body;
+  readonly content: IssueContent;
   readonly state: 'open' | 'closed';
   readonly status: IssueStatus;
   readonly type: IssueType;
-  readonly labels: ReadonlyArray<LabelName>;
   readonly subIssueNumbers: ReadonlyArray<IssueNumber>;
   readonly blockedByNumbers: ReadonlyArray<IssueNumber>;
   readonly blockingNumbers: ReadonlyArray<IssueNumber>;
-  readonly linkedPrNumber: O.Option<PrNumber>;
-  readonly parentNumber: O.Option<IssueNumber>;
-  readonly updatedAt: IsoTimestamp;
+  readonly links: IssueLinks;
+  readonly lastUpdatedAt: IsoTimestamp;
 };
 
 export function isExecutableLeaf(issue: Pick<IssueNode, 'type' | 'subIssueNumbers'>) {
@@ -179,7 +196,7 @@ export function branchNameForIssue(issueNumber: IssueNumber) {
 export function extractStatusFromFieldValue(value: O.Option<string>) {
   return pipe(
     value,
-    O.chain((v) => O.fromNullable(FIELD_VALUE_TO_STATUS[v])),
+    O.flatMap((v) => O.fromNullable(FIELD_VALUE_TO_STATUS[v])),
     O.getOrElseW(() => 'backlog' as const),
   );
 }

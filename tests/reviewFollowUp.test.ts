@@ -1,5 +1,5 @@
-import * as O from 'fp-ts/lib/Option';
 import * as TE from 'fp-ts/lib/TaskEither';
+import { match } from 'ts-pattern';
 import { describe, expect, it, vi } from 'vitest';
 import { buildReviewPrompt } from '../src/adapters/agent/prompts.js';
 import type { GitHubPort, PrReviewThread } from '../src/adapters/github/types.js';
@@ -23,7 +23,7 @@ function createMockGithub(overrides: Partial<GitHubPort> = {}) {
     createIssue: vi.fn(),
     closeIssue: vi.fn(),
     reopenIssue: vi.fn(),
-    setIssueStatus: vi.fn(),
+    updateIssueStatus: vi.fn(),
     ensureStatusField: vi.fn(),
     addLabels: vi.fn(),
     removeLabel: vi.fn(),
@@ -56,18 +56,22 @@ function createMockGithub(overrides: Partial<GitHubPort> = {}) {
 
 const sampleIssue: IssueNode = {
   number: isoIssueNumber.wrap(12),
-  title: isoTitle.wrap('Handle edge cases in parser'),
-  body: isoBody.wrap('Fix null input handling'),
+  content: {
+    title: isoTitle.wrap('Handle edge cases in parser'),
+    body: isoBody.wrap('Fix null input handling'),
+    labels: [isoLabelName.wrap('type:bug'), isoLabelName.wrap('ai-managed')],
+  },
   state: 'open',
   status: 'review_pending',
   type: 'bug',
-  labels: [isoLabelName.wrap('type:bug'), isoLabelName.wrap('ai-managed')],
   subIssueNumbers: [],
   blockedByNumbers: [],
   blockingNumbers: [],
-  linkedPrNumber: O.some(isoPrNumber.wrap(34)),
-  parentNumber: O.none,
-  updatedAt: isoIsoTimestamp.wrap('2026-01-01T00:00:00Z'),
+  links: {
+    linkedPr: { kind: 'linked', prNumber: isoPrNumber.wrap(34) },
+    parent: { kind: 'root' },
+  },
+  lastUpdatedAt: isoIsoTimestamp.wrap('2026-01-01T00:00:00Z'),
 };
 
 const firstThread: PrReviewThread = {
@@ -102,7 +106,7 @@ const secondThread: PrReviewThread = {
   ],
 };
 
-const sampleThreads: ReadonlyArray<PrReviewThread> = [firstThread, secondThread];
+const sampleThreads = [firstThread, secondThread] as const satisfies ReadonlyArray<PrReviewThread>;
 
 describe('AgentResultSchema', () => {
   it('accepts optional resolvedComments array', () => {
@@ -116,9 +120,14 @@ describe('AgentResultSchema', () => {
       ],
     });
     expect(parsed.success).toBe(true);
-    if (parsed.success) {
-      expect(parsed.data.resolvedComments).toHaveLength(1);
-    }
+    match(parsed)
+      .with({ success: true }, ({ data }) => {
+        expect(data.resolvedComments).toHaveLength(1);
+      })
+      .with({ success: false }, () => {
+        expect.unreachable('Expected parsed success');
+      })
+      .exhaustive();
   });
 });
 
@@ -129,8 +138,10 @@ describe('buildReviewPrompt', () => {
       prNumber: 34,
       reviewComments: ['[Review CHANGES_REQUESTED by alice]: Please address the inline comments.'],
       reviewThreads: sampleThreads,
-      verifyCommand: 'npm test',
-      resultFilePath: '/tmp/result.json',
+      execution: {
+        verifyCommand: 'npm test',
+        resultFilePath: '/tmp/result.json',
+      },
     });
 
     expect(prompt).toContain('PRRT_thread_1');
@@ -207,8 +218,8 @@ describe('replyAndResolveReviewThreads', () => {
             TE.left({
               type: 'GITHUB_API_ERROR',
               message: isoMessage.wrap('Not found'),
-              status: O.some(isoCount.wrap(404)),
-              cause: O.none,
+              httpStatus: { kind: 'known', code: isoCount.wrap(404) },
+              cause: { kind: 'none' },
             }),
           )
           .mockReturnValueOnce(TE.right(undefined)),

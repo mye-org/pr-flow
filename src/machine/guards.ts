@@ -14,6 +14,8 @@ export type PickupGuardContext = {
   readonly blockingIssues: ReadonlyArray<IssueNumber>;
 };
 
+const subIssueCountOf = (issue: IssueNode) => isoCount.wrap(issue.subIssueNumbers.length);
+
 const checkLeaf = (ctx: PickupGuardContext) =>
   E.fromPredicate<PickupGuardContext, GuardError>(
     (c) => isExecutableLeaf(c.issue),
@@ -21,7 +23,7 @@ const checkLeaf = (ctx: PickupGuardContext) =>
       type: 'NOT_AN_EXECUTABLE_LEAF',
       issueNumber: c.issue.number,
       issueType: c.issue.type,
-      subIssueCount: isoCount.wrap(c.issue.subIssueNumbers.length),
+      subIssueCount: subIssueCountOf(c.issue),
     }),
   )(ctx);
 
@@ -67,10 +69,10 @@ const checkWipLimit = (ctx: PickupGuardContext) =>
 export function checkPickupEligibility(ctx: PickupGuardContext) {
   return pipe(
     checkLeaf(ctx),
-    E.chain(checkReadyState),
-    E.chain(checkBlockers),
-    E.chain(checkNoOpenPr),
-    E.chain(checkWipLimit),
-    E.map(() => true as const),
+    E.flatMap(checkReadyState),
+    E.flatMap(checkBlockers),
+    E.flatMap(checkNoOpenPr),
+    E.flatMap(checkWipLimit),
+    E.map(() => 'eligible' as const),
   );
 }

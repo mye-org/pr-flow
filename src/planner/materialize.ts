@@ -2,7 +2,8 @@ import { flow, pipe } from 'fp-ts/lib/function';
 import * as O from 'fp-ts/lib/Option';
 import * as RA from 'fp-ts/lib/ReadonlyArray';
 import * as TE from 'fp-ts/lib/TaskEither';
-import type { GitHubPort } from '../adapters/github/types.js';
+import { match } from 'ts-pattern';
+import type { GitHubPlannerPort } from '../adapters/github/types.js';
 import type { DomainError } from '../domain/errors.js';
 import { AI_MANAGED_LABEL, TYPE_TO_LABEL } from '../domain/issue.js';
 import { isoIssueNumber, isoLabelName, type IssueNumber } from '../domain/newtypes.js';
@@ -35,17 +36,34 @@ export const ISSUE_DEVELOPMENT_STANDARDS = [
 
 export function formatIssueBody(body: string) {
   const trimmed = body.trim();
-  if (trimmed.includes('## Development Standards')) {
-    return trimmed;
-  }
-  return trimmed.length > 0
-    ? `${trimmed}\n\n${ISSUE_DEVELOPMENT_STANDARDS}`
-    : ISSUE_DEVELOPMENT_STANDARDS;
+  return match(trimmed.includes('## Development Standards'))
+    .with(true, () => trimmed)
+    .with(false, () =>
+      trimmed.length > 0
+        ? `${trimmed}\n\n${ISSUE_DEVELOPMENT_STANDARDS}`
+        : ISSUE_DEVELOPMENT_STANDARDS,
+    )
+    .exhaustive();
 }
+
+type MaterializeContext = {
+  readonly github: GitHubPlannerPort;
+  readonly idToNumber: ReadonlyMap<string, number>;
+};
+
+const assignCreatedStatus = (
+  github: GitHubPlannerPort,
+  issueNumber: number,
+  epicId: string,
+) =>
+  pipe(
+    github.updateIssueStatus(issueNumber, 'backlog'),
+    TE.map(() => new Map<string, number>([[epicId, issueNumber]])),
+  );
 
 const createEpicNode = (
   epic: NonNullable<PlanManifest['epic']>,
-  github: GitHubPort,
+  github: GitHubPlannerPort,
 ) =>
   pipe(
     github.createIssue({
@@ -53,17 +71,12 @@ const createEpicNode = (
       body: formatIssueBody(epic.body),
       labels: [isoLabelName.unwrap(TYPE_TO_LABEL.epic), isoLabelName.unwrap(AI_MANAGED_LABEL)],
     }),
-    TE.chain((created) =>
-      pipe(
-        github.setIssueStatus(created.number, 'backlog'),
-        TE.map(() => new Map<string, number>([[epic.id, created.number]])),
-      ),
-    ),
+    TE.flatMap((created) => assignCreatedStatus(github, created.number, epic.id)),
   );
 
 const createEpicIfPresent = (
   epic: PlanManifest['epic'],
-  github: GitHubPort,
+  github: GitHubPlannerPort,
 ) =>
   pipe(
     O.fromNullable(epic),
@@ -93,180 +106,262 @@ const collectParentIds = (nodes: ReadonlyArray<PlanIssueNode>) =>
 const initialStatusForNode = (
   node: PlanIssueNode,
   parentIds: ReadonlySet<string>,
-) => {
-  if (node.type === 'epic' || parentIds.has(node.id)) {
-    return 'backlog' as const;
-  }
-  return node.blockedBy.length > 0 ? ('blocked_dep' as const) : ('ready' as const);
-};
+) =>
+  match(node.type === 'epic' || parentIds.has(node.id))
+    .with(true, () => 'backlog' as const)
+    .with(false, () => (node.blockedBy.length > 0 ? ('blocked_dep' as const) : ('ready' as const)))
+    .exhaustive();
+
+const assignNodeStatus = (
+  ctx: MaterializeContext,
+  node: PlanIssueNode,
+  createdNumber: number,
+  parentIds: ReadonlySet<string>,
+) =>
+  pipe(
+    ctx.github.updateIssueStatus(createdNumber, initialStatusForNode(node, parentIds)),
+    TE.map(() => new Map(ctx.idToNumber).set(node.id, createdNumber)),
+  );
 
 const createSingleNode = (
   node: PlanIssueNode,
-  idToNumber: ReadonlyMap<string, number>,
+  ctx: MaterializeContext,
   parentIds: ReadonlySet<string>,
-  github: GitHubPort,
 ) =>
   pipe(
-    github.createIssue({ title: node.title, body: formatIssueBody(node.body), labels: nodeLabels(node) }),
-    TE.chain((created) =>
-      pipe(
-        github.setIssueStatus(created.number, initialStatusForNode(node, parentIds)),
-        TE.map(() => new Map(idToNumber).set(node.id, created.number)),
-      ),
+    ctx.github.createIssue({
+      title: node.title,
+      body: formatIssueBody(node.body),
+      labels: nodeLabels(node),
+    }),
+    TE.flatMap((created) => assignNodeStatus(ctx, node, created.number, parentIds)),
+  );
+
+const appendCreatedNode = (
+  github: GitHubPlannerPort,
+  parentIds: ReadonlySet<string>,
+) => (acc: TE.TaskEither<DomainError, ReadonlyMap<string, number>>, node: PlanIssueNode) =>
+  pipe(
+    acc,
+    TE.flatMap((idToNumber) => createSingleNode(node, { github, idToNumber }, parentIds)),
+  );
+
+const createNodesWithParentIds = (
+  sorted: ReadonlyArray<PlanIssueNode>,
+  initialMap: ReadonlyMap<string, number>,
+  github: GitHubPlannerPort,
+  parentIds: ReadonlySet<string>,
+) =>
+  pipe(
+    sorted,
+    RA.reduce(
+      TE.right<DomainError, ReadonlyMap<string, number>>(initialMap),
+      appendCreatedNode(github, parentIds),
     ),
   );
 
 const createAllNodes = (
   sorted: ReadonlyArray<PlanIssueNode>,
   initialMap: ReadonlyMap<string, number>,
-  github: GitHubPort,
+  github: GitHubPlannerPort,
 ) =>
   pipe(collectParentIds(sorted), (parentIds) =>
-    pipe(
-      sorted,
-      RA.reduce(TE.right<DomainError, ReadonlyMap<string, number>>(initialMap), (acc, node) =>
-        pipe(
-          acc,
-          TE.chain((map) => createSingleNode(node, map, parentIds, github)),
-        ),
-      ),
-    ),
+    createNodesWithParentIds(sorted, initialMap, github, parentIds),
   );
+
+const emptyParentLinkResult = () => ({
+  subLinks: [] as ReadonlyArray<SubIssueLink>,
+  tasks: [] as ReadonlyArray<TE.TaskEither<DomainError, void>>,
+});
+
+const buildParentLinkResult = (
+  parentNum: number,
+  childNum: number,
+  github: GitHubPlannerPort,
+) => ({
+  subLinks: [
+    { parent: isoIssueNumber.wrap(parentNum), child: isoIssueNumber.wrap(childNum) },
+  ] as ReadonlyArray<SubIssueLink>,
+  tasks: [github.addSubIssue(parentNum, childNum)] as ReadonlyArray<
+    TE.TaskEither<DomainError, void>
+  >,
+});
 
 const collectParentLink = (
   childNum: number,
   parentId: O.Option<string>,
-  idToNumber: ReadonlyMap<string, number>,
-  github: GitHubPort,
+  ctx: MaterializeContext,
 ) =>
   pipe(
     parentId,
-    O.chain(flow((id: string) => idToNumber.get(id), O.fromNullable)),
+    O.flatMap(flow((id: string) => ctx.idToNumber.get(id), O.fromNullable)),
     O.match(
-      () => ({ subLinks: [] as ReadonlyArray<SubIssueLink>, tasks: [] as ReadonlyArray<TE.TaskEither<DomainError, void>> }),
-      (parentNum) => ({
-        subLinks: [{ parent: isoIssueNumber.wrap(parentNum), child: isoIssueNumber.wrap(childNum) }] as ReadonlyArray<SubIssueLink>,
-        tasks: [github.addSubIssue(parentNum, childNum)] as ReadonlyArray<TE.TaskEither<DomainError, void>>,
-      }),
+      emptyParentLinkResult,
+      (parentNum) => buildParentLinkResult(parentNum, childNum, ctx.github),
     ),
   );
 
 const toDepPair = (
   childNum: number,
   blockerNum: number,
-  github: GitHubPort,
+  github: GitHubPlannerPort,
 ) => ({
   link: { issue: isoIssueNumber.wrap(childNum), blockedBy: isoIssueNumber.wrap(blockerNum) },
   task: github.addBlockedBy(childNum, blockerNum),
 });
 
+const resolveDepPair = (
+  childNum: number,
+  depId: string,
+  ctx: MaterializeContext,
+) =>
+  pipe(
+    O.fromNullable(ctx.idToNumber.get(depId)),
+    O.map((b) => toDepPair(childNum, b, ctx.github)),
+  );
+
+type DepPair = ReturnType<typeof toDepPair>;
+
+const extractDepLinks = (pairs: ReadonlyArray<DepPair>) =>
+  pipe(
+    pairs,
+    RA.map((p) => p.link),
+  );
+
+const extractDepTasks = (pairs: ReadonlyArray<DepPair>) =>
+  pipe(
+    pairs,
+    RA.map((p) => p.task),
+  );
+
 const collectDepLinks = (
   childNum: number,
   blockedBy: ReadonlyArray<string>,
-  idToNumber: ReadonlyMap<string, number>,
-  github: GitHubPort,
+  ctx: MaterializeContext,
 ) =>
   pipe(
     blockedBy,
-    RA.filterMap((depId) =>
-      pipe(O.fromNullable(idToNumber.get(depId)), O.map((b) => toDepPair(childNum, b, github))),
-    ),
+    RA.filterMap((depId) => resolveDepPair(childNum, depId, ctx)),
     (pairs) => ({
-      depLinks: pipe(pairs, RA.map((p) => p.link)),
-      tasks: pipe(pairs, RA.map((p) => p.task)),
+      depLinks: extractDepLinks(pairs),
+      tasks: extractDepTasks(pairs),
     }),
+  );
+
+const resolveParentId = (node: PlanIssueNode, epic: PlanManifest['epic']) =>
+  pipe(
+    O.fromNullable(node.parentId),
+    O.alt(() => O.fromNullable(epic?.id)),
   );
 
 const buildNodeLinks = (
   childNum: number,
   node: PlanIssueNode,
   epic: PlanManifest['epic'],
-  idToNumber: ReadonlyMap<string, number>,
-  github: GitHubPort,
+  ctx: MaterializeContext,
 ) => {
-  const parent = collectParentLink(
-    childNum,
-    pipe(O.fromNullable(node.parentId), O.alt(() => O.fromNullable(epic?.id))),
-    idToNumber,
-    github,
-  );
-  const deps = collectDepLinks(childNum, node.blockedBy, idToNumber, github);
+  const parent = collectParentLink(childNum, resolveParentId(node, epic), ctx);
+  const deps = collectDepLinks(childNum, node.blockedBy, ctx);
   return {
     subLinks: parent.subLinks,
     depLinks: deps.depLinks,
-    tasks: [...parent.tasks, ...deps.tasks],
+    tasks: [...parent.tasks, ...deps.tasks] as ReadonlyArray<TE.TaskEither<DomainError, void>>,
   };
 };
+
+type CollectedNodeLinks = ReturnType<typeof buildNodeLinks>;
 
 const collectLinksForNode = (
   node: PlanIssueNode,
   epic: PlanManifest['epic'],
-  idToNumber: ReadonlyMap<string, number>,
-  github: GitHubPort,
+  ctx: MaterializeContext,
 ) =>
   pipe(
-    O.fromNullable(idToNumber.get(node.id)),
+    O.fromNullable(ctx.idToNumber.get(node.id)),
     O.match(
       () => ({
         subLinks: [] as ReadonlyArray<SubIssueLink>,
         depLinks: [] as ReadonlyArray<DependencyLink>,
         tasks: [] as ReadonlyArray<TE.TaskEither<DomainError, void>>,
       }),
-      (childNum) => buildNodeLinks(childNum, node, epic, idToNumber, github),
+      (childNum) => buildNodeLinks(childNum, node, epic, ctx),
     ),
   );
 
-const runSequentialTasks = (
-  tasks: ReadonlyArray<TE.TaskEither<DomainError, void>>,
+const chainTask = (
+  acc: TE.TaskEither<DomainError, void>,
+  task: TE.TaskEither<DomainError, void>,
 ) =>
   pipe(
-    tasks,
-    RA.reduce(TE.right(undefined) as TE.TaskEither<DomainError, void>, (acc, task) =>
-      pipe(
-        acc,
-        TE.chain(() => task),
-      ),
-    ),
+    acc,
+    TE.flatMap(() => task),
+  );
+
+const runSequentialTasks = (tasks: ReadonlyArray<TE.TaskEither<DomainError, void>>) =>
+  pipe(tasks, RA.reduce(TE.right(undefined) as TE.TaskEither<DomainError, void>, chainTask));
+
+const flattenTasks = (collected: ReadonlyArray<CollectedNodeLinks>) =>
+  pipe(
+    collected,
+    RA.flatMap((c) => c.tasks),
+  );
+
+const flattenSubLinks = (collected: ReadonlyArray<CollectedNodeLinks>) =>
+  pipe(
+    collected,
+    RA.flatMap((c) => c.subLinks),
+  );
+
+const flattenDepLinks = (collected: ReadonlyArray<CollectedNodeLinks>) =>
+  pipe(
+    collected,
+    RA.flatMap((c) => c.depLinks),
+  );
+
+const executeCollectedLinks = (
+  collected: ReadonlyArray<CollectedNodeLinks>,
+  idToNumber: ReadonlyMap<string, number>,
+) =>
+  pipe(
+    runSequentialTasks(flattenTasks(collected)),
+    TE.map(() => ({
+      createdIssues: Object.fromEntries(idToNumber.entries()),
+      subIssueLinks: flattenSubLinks(collected),
+      dependencyLinks: flattenDepLinks(collected),
+    })),
   );
 
 const linkAllNodes = (
   sorted: ReadonlyArray<PlanIssueNode>,
   epic: PlanManifest['epic'],
-  idToNumber: ReadonlyMap<string, number>,
-  github: GitHubPort,
+  ctx: MaterializeContext,
 ) =>
   pipe(
     sorted,
-    RA.map((node) => collectLinksForNode(node, epic, idToNumber, github)),
-    (collected) =>
-      pipe(
-        runSequentialTasks(pipe(collected, RA.chain((c) => c.tasks))),
-        TE.map(() => ({
-          createdIssues: Object.fromEntries(idToNumber.entries()),
-          subIssueLinks: pipe(collected, RA.chain((c) => c.subLinks)),
-          dependencyLinks: pipe(collected, RA.chain((c) => c.depLinks)),
-        })),
-      ),
+    RA.map((node) => collectLinksForNode(node, epic, ctx)),
+    (collected) => executeCollectedLinks(collected, ctx.idToNumber),
   );
 
 const materializeValidPlan = (
   validManifest: PlanManifest,
-  github: GitHubPort,
+  github: GitHubPlannerPort,
 ) => {
   const sorted = topoSortPlan(validManifest);
   return pipe(
     createEpicIfPresent(validManifest.epic, github),
-    TE.chain((epicMap) => createAllNodes(sorted, epicMap, github)),
-    TE.chain((idToNumber) => linkAllNodes(sorted, validManifest.epic, idToNumber, github)),
+    TE.flatMap((epicMap) => createAllNodes(sorted, epicMap, github)),
+    TE.flatMap((idToNumber) =>
+      linkAllNodes(sorted, validManifest.epic, { github, idToNumber }),
+    ),
   );
 };
 
 export function materializePlan(
   manifest: PlanManifest,
-  github: GitHubPort,
+  github: GitHubPlannerPort,
 ) {
   return pipe(
     TE.fromEither(validatePlanDag(manifest)),
-    TE.chain((validManifest) => materializeValidPlan(validManifest, github)),
+    TE.flatMap((validManifest) => materializeValidPlan(validManifest, github)),
   );
 }

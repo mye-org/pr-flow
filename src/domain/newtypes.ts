@@ -13,6 +13,7 @@ export type IsoTimestamp = Newtype<{ readonly IsoTimestamp: unique symbol }, str
 export type HexColor = Newtype<{ readonly HexColor: unique symbol }, string>;
 export type FieldOptionName = Newtype<{ readonly FieldOptionName: unique symbol }, string>;
 export type ReviewerName = Newtype<{ readonly ReviewerName: unique symbol }, string>;
+export type PlanNodeId = Newtype<{ readonly PlanNodeId: unique symbol }, string>;
 
 export const isoIssueNumber = iso<IssueNumber>();
 export const isoPrNumber = iso<PrNumber>();
@@ -26,3 +27,4 @@ export const isoIsoTimestamp = iso<IsoTimestamp>();
 export const isoHexColor = iso<HexColor>();
 export const isoFieldOptionName = iso<FieldOptionName>();
 export const isoReviewerName = iso<ReviewerName>();
+export const isoPlanNodeId = iso<PlanNodeId>();

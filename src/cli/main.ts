@@ -4,12 +4,15 @@ import * as path from 'node:path';
 import { Command } from 'commander';
 import * as E from 'fp-ts/lib/Either';
 import { pipe } from 'fp-ts/lib/function';
-import * as O from 'fp-ts/lib/Option';
 import * as TE from 'fp-ts/lib/TaskEither';
+import { z } from 'zod';
 import { buildImplementPrompt, buildReviewPrompt } from '../adapters/agent/prompts.js';
 import { runAgentExecution } from '../adapters/agent/runner.js';
-import { OctokitGitHubAdapter } from '../adapters/github/client.js';
-import type { PrReviewThread } from '../adapters/github/types.js';
+import {
+  createOctokitGitHubAdapter,
+  isUnresolvedThreadWithComments,
+} from '../adapters/github/client.js';
+import type { PreflightCheckResult, PrReviewThread } from '../adapters/github/types.js';
 import { parseConfig } from '../domain/config.js';
 import { formatGuardError, type DomainError } from '../domain/errors.js';
 import {
@@ -52,9 +55,10 @@ function formatDomainError(err: DomainError) {
     case 'CONFIG_ERROR':
       return `Configuration error: ${isoMessage.unwrap(err.message)}`;
     case 'PLAN_VALIDATION_ERROR': {
-      const details = O.isSome(err.details)
-        ? `\n  - ${err.details.value.map(isoMessage.unwrap).join('\n  - ')}`
-        : '';
+      const details =
+        err.details.length > 0
+          ? `\n  - ${err.details.map(isoMessage.unwrap).join('\n  - ')}`
+          : '';
       return `Plan validation error: ${isoMessage.unwrap(err.message)}${details}`;
     }
     case 'GITHUB_API_ERROR':
@@ -134,7 +138,7 @@ function createGitHubFromEnv(repoFlag?: string, statusFieldName?: string) {
     });
   }
   const [owner, repo] = repoSlug.split('/', 2) as [string, string];
-  return new OctokitGitHubAdapter({ token, owner, repo, statusFieldName });
+  return createOctokitGitHubAdapter({ token, owner, repo, statusFieldName });
 }
 
 async function runOrExit<T>(task: TE.TaskEither<DomainError, T>) {
@@ -160,47 +164,40 @@ program
   .description('Project-agnostic Agile Issue-to-PR workflow engine')
   .version('1.0.0');
 
-function printPreflightReport(
-  checks: ReadonlyArray<{
-    readonly name: string;
-    readonly status: 'pass' | 'warn' | 'fail';
-    readonly message: string;
-    readonly remediation?: string;
-  }>,
-) {
+function printPreflightReport(checks: ReadonlyArray<PreflightCheckResult>) {
   console.log('\npr-flow Preflight Checks:');
   let hasFailures = false;
   for (const check of checks) {
     const tag = (() => {
-      if (check.status === 'pass') return '[PASS]';
-      return check.status === 'warn' ? '[WARN]' : '[FAIL]';
+      if (check.outcome === 'pass') return '[PASS]';
+      return check.outcome === 'warn' ? '[WARN]' : '[FAIL]';
     })();
     console.log(`  ${tag} ${check.name}: ${check.message}`);
     if (check.remediation) {
       console.log(`         Fix: ${check.remediation}`);
     }
-    if (check.status === 'fail') {
+    if (check.outcome === 'fail') {
       hasFailures = true;
     }
   }
   return hasFailures;
 }
 
-type InitCmdOpts = {
-  readonly dir: string;
-  readonly owner: string;
-  readonly ref: string;
-  readonly baseBranch: string;
-  readonly wipLimit: string;
-  readonly setupCommand: string;
-  readonly verifyCommand: string;
-  readonly reviewMode: 'changes_requested' | 'comment' | 'both';
-  readonly force: boolean;
-  readonly syncLabels: boolean;
-  readonly createCustomField: boolean;
-  readonly skipChecks: boolean;
-  readonly repo?: string;
-};
+const InitCmdOptsSchema = z.object({
+  dir: z.string(),
+  owner: z.string(),
+  ref: z.string(),
+  baseBranch: z.string(),
+  wipLimit: z.string(),
+  setupCommand: z.string(),
+  verifyCommand: z.string(),
+  reviewMode: z.enum(['changes_requested', 'comment', 'both']),
+  force: z.boolean(),
+  syncLabels: z.boolean(),
+  createCustomField: z.boolean(),
+  skipChecks: z.boolean(),
+  repo: z.string().optional(),
+});
 
 program
   .command('init')
@@ -218,7 +215,8 @@ program
   .option('--create-custom-field', 'Also create/verify the pr-flow-status organization Issue Field via GITHUB_TOKEN', false)
   .option('--skip-checks', 'Skip GitHub repository preflight checks', false)
   .option('--repo <owner/repo>', 'Target GitHub repository for --sync-labels / --create-custom-field / preflight checks')
-  .action(async (opts: InitCmdOpts) => {
+  .action(async (rawOpts: unknown) => {
+    const opts = InitCmdOptsSchema.parse(rawOpts);
     const result = generateInitFiles({
       targetDir: path.resolve(opts.dir),
       prFlowOwner: opts.owner,
@@ -274,27 +272,28 @@ program
   .option('--owner <owner>', 'GitHub owner of the pr-flow repository', 'mye-org')
   .option('--field-name <name>', 'Issue Field name', 'pr-flow-status')
   .option('--secret-name <name>', 'Required Actions secret name', 'GEMINI_API_KEY')
-  .action(
-    async (opts: {
-      readonly repo?: string;
-      readonly owner: string;
-      readonly fieldName: string;
-      readonly secretName: string;
-    }) => {
-      const github = createGitHubFromEnv(opts.repo, opts.fieldName);
-      const checks = await runOrExit(
-        github.checkSetupPrerequisites({
-          prFlowOwner: opts.owner,
-          expectedLabels: DEFAULT_LABELS,
-          secretName: opts.secretName,
-        }),
-      );
-      const hasFailures = printPreflightReport(checks);
-      if (hasFailures) {
-        process.exit(1);
-      }
-    },
-  );
+  .action(async (rawOpts: unknown) => {
+    const opts = z
+      .object({
+        repo: z.string().optional(),
+        owner: z.string(),
+        fieldName: z.string(),
+        secretName: z.string(),
+      })
+      .parse(rawOpts);
+    const github = createGitHubFromEnv(opts.repo, opts.fieldName);
+    const checks = await runOrExit(
+      github.checkSetupPrerequisites({
+        prFlowOwner: opts.owner,
+        expectedLabels: DEFAULT_LABELS,
+        secretName: opts.secretName,
+      }),
+    );
+    const hasFailures = printPreflightReport(checks);
+    if (hasFailures) {
+      process.exit(1);
+    }
+  });
 
 const labelsCmd = program.command('labels').description('Manage pr-flow GitHub labels');
 
@@ -302,7 +301,8 @@ labelsCmd
   .command('sync')
   .description('Idempotently create or update all pr-flow labels in the target GitHub repository')
   .option('--repo <owner/repo>', 'GitHub repository (defaults to GITHUB_REPOSITORY)')
-  .action(async (opts: { readonly repo?: string }) => {
+  .action(async (rawOpts: unknown) => {
+    const opts = z.object({ repo: z.string().optional() }).parse(rawOpts);
     const github = createGitHubFromEnv(opts.repo);
     await runOrExit(github.ensureLabels(DEFAULT_LABELS));
     console.log(`Synced ${String(DEFAULT_LABELS.length)} labels.`);
@@ -315,7 +315,8 @@ fieldsCmd
   .description('Idempotently create the pr-flow-status Single-Select Issue Field in the target GitHub organization')
   .option('--field-name <name>', 'Issue Field name', 'pr-flow-status')
   .option('--repo <owner/repo>', 'GitHub repository (defaults to GITHUB_REPOSITORY)')
-  .action(async (opts: { readonly fieldName: string; readonly repo?: string }) => {
+  .action(async (rawOpts: unknown) => {
+    const opts = z.object({ fieldName: z.string(), repo: z.string().optional() }).parse(rawOpts);
     const github = createGitHubFromEnv(opts.repo, opts.fieldName);
     await runOrExit(github.ensureStatusField());
     console.log(`Synced "${opts.fieldName}" Issue Field.`);
@@ -333,49 +334,50 @@ statusCmd
   )
   .option('--field-name <name>', 'Issue Field name', 'pr-flow-status')
   .option('--repo <owner/repo>', 'GitHub repository (defaults to GITHUB_REPOSITORY)')
-  .action(
-    async (opts: {
-      readonly issue: string;
-      readonly status: string;
-      readonly fieldName: string;
-      readonly repo?: string;
-    }) => {
-      const rawStatus = opts.status.trim();
-      const resolvedStatus: IssueStatus | undefined =
-        FIELD_VALUE_TO_STATUS[rawStatus] ??
-        (Object.prototype.hasOwnProperty.call(STATUS_TO_FIELD_VALUE, rawStatus)
-          ? (rawStatus as IssueStatus)
-          : undefined);
+  .action(async (rawOpts: unknown) => {
+    const opts = z
+      .object({
+        issue: z.string(),
+        status: z.string(),
+        fieldName: z.string(),
+        repo: z.string().optional(),
+      })
+      .parse(rawOpts);
+    const rawStatus = opts.status.trim();
+    const resolvedStatus: IssueStatus | undefined =
+      FIELD_VALUE_TO_STATUS[rawStatus] ??
+      (Object.prototype.hasOwnProperty.call(STATUS_TO_FIELD_VALUE, rawStatus)
+        ? (rawStatus as IssueStatus)
+        : undefined);
 
-      if (!resolvedStatus) {
-        return fail({
-          type: 'CONFIG_ERROR',
-          message: isoMessage.wrap(
-            `Invalid status "${rawStatus}". Expected one of: ${Object.values(STATUS_TO_FIELD_VALUE).join(', ')}.`,
-          ),
-        });
-      }
+    if (!resolvedStatus) {
+      return fail({
+        type: 'CONFIG_ERROR',
+        message: isoMessage.wrap(
+          `Invalid status "${rawStatus}". Expected one of: ${Object.values(STATUS_TO_FIELD_VALUE).join(', ')}.`,
+        ),
+      });
+    }
 
-      const issueNumber = Number(opts.issue);
-      if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
-        return fail({
-          type: 'CONFIG_ERROR',
-          message: isoMessage.wrap(`Invalid issue number "${opts.issue}".`),
-        });
-      }
+    const issueNumber = Number(opts.issue);
+    if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+      return fail({
+        type: 'CONFIG_ERROR',
+        message: isoMessage.wrap(`Invalid issue number "${opts.issue}".`),
+      });
+    }
 
-      const github = createGitHubFromEnv(opts.repo, opts.fieldName);
-      await runOrExit(github.setIssueStatus(issueNumber, resolvedStatus));
-      console.log(
-        JSON.stringify({
-          updated: true,
-          issue: issueNumber,
-          field: opts.fieldName,
-          status: STATUS_TO_FIELD_VALUE[resolvedStatus],
-        }),
-      );
-    },
-  );
+    const github = createGitHubFromEnv(opts.repo, opts.fieldName);
+    await runOrExit(github.updateIssueStatus(issueNumber, resolvedStatus));
+    console.log(
+      JSON.stringify({
+        updated: true,
+        issue: issueNumber,
+        field: opts.fieldName,
+        status: STATUS_TO_FIELD_VALUE[resolvedStatus],
+      }),
+    );
+  });
 
 const planCmd = program.command('plan').description('Validate and materialize plan manifests');
 
@@ -383,11 +385,13 @@ planCmd
   .command('validate')
   .description('Validate a plan-manifest.yml schema and dependency DAG')
   .requiredOption('--file <path>', 'Path to plan-manifest.yml')
-  .action((opts: { readonly file: string }) => {
+  .action((rawOpts: unknown) => {
+    const opts = z.object({ file: z.string() }).parse(rawOpts);
     const content = readTextFileOrFail(opts.file, 'plan manifest');
-    const res = pipe(parsePlanManifest(content), E.chain(validatePlanDag));
+    const res = pipe(parsePlanManifest(content), E.flatMap(validatePlanDag));
     if (E.isLeft(res)) return fail(res.left);
-    console.log(`Plan manifest valid (${String(res.right.issues.length)} issues).`);
+    const manifest = res.right;
+    console.log(`Plan manifest valid (${String(manifest.issues.length)} issues).`);
   });
 
 planCmd
@@ -397,23 +401,24 @@ planCmd
   .option('--config <path>', 'Path to pr-flow.config.yml', 'pr-flow.config.yml')
   .option('--field-name <name>', 'Issue Field name override')
   .option('--repo <owner/repo>', 'GitHub repository (defaults to GITHUB_REPOSITORY)')
-  .action(
-    async (opts: {
-      readonly file: string;
-      readonly config: string;
-      readonly fieldName?: string;
-      readonly repo?: string;
-    }) => {
-      const content = readTextFileOrFail(opts.file, 'plan manifest');
-      const parsed = pipe(parsePlanManifest(content), E.chain(validatePlanDag));
-      if (E.isLeft(parsed)) return fail(parsed.left);
+  .action(async (rawOpts: unknown) => {
+    const opts = z
+      .object({
+        file: z.string(),
+        config: z.string(),
+        fieldName: z.string().optional(),
+        repo: z.string().optional(),
+      })
+      .parse(rawOpts);
+    const content = readTextFileOrFail(opts.file, 'plan manifest');
+    const parsed = pipe(parsePlanManifest(content), E.flatMap(validatePlanDag));
+    if (E.isLeft(parsed)) return fail(parsed.left);
 
-      const config = loadOptionalConfigFromDisk(opts.config);
-      const github = createGitHubFromEnv(opts.repo, opts.fieldName ?? config?.statusFieldName);
-      const result = await runOrExit(materializePlan(parsed.right, github));
-      console.log(JSON.stringify(result, null, 2));
-    },
-  );
+    const config = loadOptionalConfigFromDisk(opts.config);
+    const github = createGitHubFromEnv(opts.repo, opts.fieldName ?? config?.statusFieldName);
+    const result = await runOrExit(materializePlan(parsed.right, github));
+    console.log(JSON.stringify(result, null, 2));
+  });
 
 program
   .command('claim')
@@ -421,7 +426,14 @@ program
   .requiredOption('--issue <number>', 'Issue number')
   .option('--config <path>', 'Path to pr-flow.config.yml', 'pr-flow.config.yml')
   .option('--repo <owner/repo>', 'GitHub repository')
-  .action(async (opts: { readonly issue: string; readonly config: string; readonly repo?: string }) => {
+  .action(async (rawOpts: unknown) => {
+    const opts = z
+      .object({
+        issue: z.string(),
+        config: z.string(),
+        repo: z.string().optional(),
+      })
+      .parse(rawOpts);
     const issueNumber = Number(opts.issue);
     const config = loadConfigFromDisk(opts.config);
     const github = createGitHubFromEnv(opts.repo, config.statusFieldName);
@@ -501,14 +513,16 @@ program
   .option('--config <path>', 'Path to pr-flow.config.yml', 'pr-flow.config.yml')
   .option('--output-dir <dir>', 'Directory for result.json and changes.patch', '.pr-flow-out')
   .option('--repo <owner/repo>', 'GitHub repository')
-  .action(
-    async (opts: {
-      readonly issue: string;
-      readonly pr?: string;
-      readonly config: string;
-      readonly outputDir: string;
-      readonly repo?: string;
-    }) => {
+  .action(async (rawOpts: unknown) => {
+    const opts = z
+      .object({
+        issue: z.string(),
+        pr: z.string().optional(),
+        config: z.string(),
+        outputDir: z.string(),
+        repo: z.string().optional(),
+      })
+      .parse(rawOpts);
       const issueNumber = Number(opts.issue);
       const prNumber = opts.pr ? Number(opts.pr) : undefined;
       const config = loadConfigFromDisk(opts.config);
@@ -554,9 +568,11 @@ program
           prNumber,
           reviewComments: feedback.generalComments,
           reviewThreads: feedback.unresolvedThreads,
-          verifyCommand: config.workspace.verifyCommand,
+          execution: {
+            verifyCommand: config.workspace.verifyCommand,
+            resultFilePath,
+          },
           agentsMd,
-          resultFilePath,
           changedFiles,
           prDiff,
         });
@@ -577,9 +593,11 @@ program
         }
         prompt = buildImplementPrompt({
           issue,
-          verifyCommand: config.workspace.verifyCommand,
+          execution: {
+            verifyCommand: config.workspace.verifyCommand,
+            resultFilePath,
+          },
           agentsMd,
-          resultFilePath,
           repoFiles,
         });
       }
@@ -594,8 +612,7 @@ program
       if (E.isLeft(runResult)) {
         const isRetryable =
           runResult.left.type === 'AGENT_EXECUTION_ERROR' &&
-          O.isSome(runResult.left.retryability) &&
-          runResult.left.retryability.value === 'retryable';
+          runResult.left.retryability === 'retryable';
         const resultStatus = isRetryable ? 'retryable' : 'failed';
         fs.mkdirSync(outputDir, { recursive: true });
         fs.writeFileSync(
@@ -618,12 +635,13 @@ program
         return;
       }
 
+      const runOutput = runResult.right;
       console.log(
         JSON.stringify({
-          status: runResult.right.result.status,
-          hasChanges: runResult.right.hasChanges,
-          resultPath: runResult.right.resultPath,
-          patchPath: runResult.right.patchPath,
+          status: runOutput.result.status,
+          hasChanges: runOutput.hasChanges,
+          resultPath: runOutput.resultPath,
+          patchPath: runOutput.patchPath,
         }),
       );
     },
@@ -639,16 +657,18 @@ program
   .option('--review-threads <path>', 'Path to review-threads.json (defaults to sibling of result.json)')
   .option('--config <path>', 'Path to pr-flow.config.yml', 'pr-flow.config.yml')
   .option('--repo <owner/repo>', 'GitHub repository')
-  .action(
-    async (opts: {
-      readonly issue: string;
-      readonly result: string;
-      readonly patch: string;
-      readonly pr?: string;
-      readonly reviewThreads?: string;
-      readonly config: string;
-      readonly repo?: string;
-    }) => {
+  .action(async (rawOpts: unknown) => {
+    const opts = z
+      .object({
+        issue: z.string(),
+        result: z.string(),
+        patch: z.string(),
+        pr: z.string().optional(),
+        reviewThreads: z.string().optional(),
+        config: z.string(),
+        repo: z.string().optional(),
+      })
+      .parse(rawOpts);
       const issueNumber = Number(opts.issue);
       const existingPr = opts.pr ? Number(opts.pr) : undefined;
       const config = loadConfigFromDisk(opts.config);
@@ -724,11 +744,13 @@ program
               } else {
                 const createdDraft = await runOrExit(
                   github.createPullRequest({
-                    title: `[WIP] ${isoTitle.unwrap(issue.title)} (#${String(issueNumber)})`,
-                    body: `Closes #${String(issueNumber)}\n\n> [!WARNING]\n> Automated verification failed or requires human input. Partial changes have been pushed to \`${branch}\`.\n\n**Reason:** ${agentResult.reason ?? agentResult.summary}\n\n---\n*Automated by \`pr-flow\`.*`,
+                    content: {
+                      title: `[WIP] ${isoTitle.unwrap(issue.content.title)} (#${String(issueNumber)})`,
+                      body: `Closes #${String(issueNumber)}\n\n> [!WARNING]\n> Automated verification failed or requires human input. Partial changes have been pushed to \`${branch}\`.\n\n**Reason:** ${agentResult.reason ?? agentResult.summary}\n\n---\n*Automated by \`pr-flow\`.*`,
+                      labels: [isoLabelName.unwrap(AI_MANAGED_LABEL)],
+                    },
                     head: branch,
                     base: config.baseBranch,
-                    labels: [isoLabelName.unwrap(AI_MANAGED_LABEL)],
                     draft: true,
                   }),
                 );
@@ -796,7 +818,7 @@ program
         runGit(['apply', '--index', path.resolve(opts.patch)], cwd);
         const commitMsg = existingPr
           ? `fix: address review feedback for #${String(issueNumber)}`
-          : `feat: implement #${String(issueNumber)} (${isoTitle.unwrap(issue.title)})`;
+          : `feat: implement #${String(issueNumber)} (${isoTitle.unwrap(issue.content.title)})`;
         runGit(['commit', '-m', commitMsg], cwd);
         runGit(existingPr ? ['push', 'origin', branch] : ['push', '--force', 'origin', branch], cwd);
       } catch (err) {
@@ -824,11 +846,13 @@ program
         } else {
           const createdPr = await runOrExit(
             github.createPullRequest({
-              title: `${isoTitle.unwrap(issue.title)} (#${String(issueNumber)})`,
-              body: `Closes #${String(issueNumber)}\n\n### Summary\n${agentResult.summary}\n\n---\n*Automated by \`pr-flow\`.*`,
+              content: {
+                title: `${isoTitle.unwrap(issue.content.title)} (#${String(issueNumber)})`,
+                body: `Closes #${String(issueNumber)}\n\n### Summary\n${agentResult.summary}\n\n---\n*Automated by \`pr-flow\`.*`,
+                labels: [isoLabelName.unwrap(AI_MANAGED_LABEL)],
+              },
               head: branch,
               base: config.baseBranch,
-              labels: [isoLabelName.unwrap(AI_MANAGED_LABEL)],
             }),
           );
           prNumber = createdPr.number;
@@ -842,7 +866,7 @@ program
           threadsToResolve = readJsonFileOrFail(threadsPath, 'review-threads.json') as ReadonlyArray<PrReviewThread>;
         } else {
           const fetchedThreads = await runOrExit(github.getPrReviewThreads(prNumber));
-          threadsToResolve = fetchedThreads.filter((t) => !t.isResolved && t.comments.length > 0);
+          threadsToResolve = fetchedThreads.filter(isUnresolvedThreadWithComments);
         }
 
         const followUp = await replyAndResolveReviewThreads({
@@ -906,13 +930,15 @@ program
   .option('--issue <number>', 'Linked issue number (optional)', '0')
   .option('--config <path>', 'Path to pr-flow.config.yml', 'pr-flow.config.yml')
   .option('--repo <owner/repo>', 'GitHub repository')
-  .action(
-    async (opts: {
-      readonly pr: string;
-      readonly issue: string;
-      readonly config: string;
-      readonly repo?: string;
-    }) => {
+  .action(async (rawOpts: unknown) => {
+    const opts = z
+      .object({
+        pr: z.string(),
+        issue: z.string(),
+        config: z.string(),
+        repo: z.string().optional(),
+      })
+      .parse(rawOpts);
       const prNumber = Number(opts.pr);
       const issueNumber = Number(opts.issue);
       const config = loadOptionalConfigFromDisk(opts.config);
@@ -946,15 +972,17 @@ program
   .option('--config <path>', 'Path to pr-flow.config.yml', 'pr-flow.config.yml')
   .option('--field-name <name>', 'Issue Field name override')
   .option('--repo <owner/repo>', 'GitHub repository')
-  .action(
-    async (opts: {
-      readonly issue: string;
-      readonly pr: string;
-      readonly prMerged: boolean;
-      readonly config: string;
-      readonly fieldName?: string;
-      readonly repo?: string;
-    }) => {
+  .action(async (rawOpts: unknown) => {
+    const opts = z
+      .object({
+        issue: z.string(),
+        pr: z.string(),
+        prMerged: z.boolean(),
+        config: z.string(),
+        fieldName: z.string().optional(),
+        repo: z.string().optional(),
+      })
+      .parse(rawOpts);
       const config = loadOptionalConfigFromDisk(opts.config);
       const github = createGitHubFromEnv(opts.repo, opts.fieldName ?? config?.statusFieldName);
       let issueNumber = Number(opts.issue);
@@ -1086,7 +1114,7 @@ program
           if (issue.state !== 'open' || issue.status !== 'ready') continue;
           const num = isoIssueNumber.unwrap(issue.number);
           if (containerNumbers.has(num) || !isExecutableLeaf(issue)) continue;
-          const ageMs = now - Date.parse(isoIsoTimestamp.unwrap(issue.updatedAt));
+          const ageMs = now - Date.parse(isoIsoTimestamp.unwrap(issue.lastUpdatedAt));
           if (!Number.isNaN(ageMs) && ageMs < cooldownMs) continue;
 
           const blockers = await runOrExit(github.listBlockedBy(num));

@@ -1,5 +1,4 @@
 import { pipe } from 'fp-ts/lib/function';
-import * as O from 'fp-ts/lib/Option';
 import * as RA from 'fp-ts/lib/ReadonlyArray';
 import { match } from 'ts-pattern';
 import type { Effect } from '../domain/effects.js';
@@ -50,8 +49,7 @@ const buildStatusEffects = (
         {
           type: 'SET_STATUS_FIELD',
           issueNumber: parent.number,
-          from: O.some(parent.status),
-          to: targetStatus,
+          transition: { kind: 'transition', from: parent.status, to: targetStatus },
         },
       ] satisfies ReadonlyArray<Effect>,
     )

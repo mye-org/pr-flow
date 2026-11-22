@@ -2,12 +2,16 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as E from 'fp-ts/lib/Either';
-import * as O from 'fp-ts/lib/Option';
 import type { PrFlowConfig } from '../../domain/config.js';
 import type { DomainError } from '../../domain/errors.js';
 import { AgentResultSchema, type AgentResult } from '../../domain/issue.js';
 import { isoCount, isoMessage } from '../../domain/newtypes.js';
 import { buildVerifyFixPrompt } from './prompts.js';
+
+export type RunnerPaths = {
+  readonly cwd: string;
+  readonly outputDir: string;
+};
 
 export type AgentRunOutput = {
   result: AgentResult;
@@ -16,7 +20,7 @@ export type AgentRunOutput = {
   hasChanges: boolean;
 };
 
-const TRANSIENT_ERROR_PATTERNS: ReadonlyArray<RegExp> = [
+const TRANSIENT_ERROR_PATTERNS = [
   /\b503\b/,
   /\b429\b/,
   /Service Unavailable/i,
@@ -28,18 +32,18 @@ const TRANSIENT_ERROR_PATTERNS: ReadonlyArray<RegExp> = [
   /ECONNRESET/,
   /ETIMEDOUT/,
   /EAI_AGAIN/,
-];
+] as const satisfies ReadonlyArray<RegExp>;
 
 export function isTransientAgentError(output: string, timedOut: boolean) {
   if (timedOut) return true;
   return TRANSIENT_ERROR_PATTERNS.some((pattern) => pattern.test(output));
 }
 
-const MODEL_UNAVAILABLE_PATTERNS: ReadonlyArray<RegExp> = [
+const MODEL_UNAVAILABLE_PATTERNS = [
   /ModelNotFoundError/,
   /is no longer available/i,
   /\b404\b/,
-];
+] as const satisfies ReadonlyArray<RegExp>;
 
 export function isModelFallbackError(output: string, timedOut: boolean) {
   return (
@@ -95,15 +99,15 @@ function runShell(
   return runProcess('bash', ['-lc', command], cwd, env, timeoutMs);
 }
 
-function resetWorkingTree(cwd: string, outputDir: string) {
+function resetWorkingTree(paths: RunnerPaths) {
   try {
-    execFileSync('git', ['checkout', '--', '.'], { cwd, stdio: 'pipe' });
-    const relOut = path.relative(cwd, outputDir);
+    execFileSync('git', ['checkout', '--', '.'], { cwd: paths.cwd, stdio: 'pipe' });
+    const relOut = path.relative(paths.cwd, paths.outputDir);
     let cleanArgs: ReadonlyArray<string> = ['clean', '-fd', '-e', '.gemini', '-e', '_pr_flow'];
     if (relOut && !relOut.startsWith('..') && !path.isAbsolute(relOut)) {
       cleanArgs = [...cleanArgs, '-e', relOut];
     }
-    execFileSync('git', [...cleanArgs], { cwd, stdio: 'pipe' });
+    execFileSync('git', [...cleanArgs], { cwd: paths.cwd, stdio: 'pipe' });
   } catch {
     // Best-effort cleanup between model fallback attempts
   }
@@ -297,30 +301,31 @@ export function extractAgentResultFromText(text: string) {
 }
 
 export function buildGeminiSettings(config: PrFlowConfig) {
-  const settings: Record<string, unknown> = {
-    model: {
-      maxSessionTurns: config.agent.maxSessionTurns,
-      compressionThreshold: config.agent.compressionThreshold,
-    },
+  const baseModel = {
+    maxSessionTurns: config.agent.maxSessionTurns,
+    compressionThreshold: config.agent.compressionThreshold,
   };
 
   if (config.agent.thinkingBudget !== undefined) {
     const allModels = Array.from(new Set([config.agent.model, ...config.agent.fallbackModels]));
-    settings.modelConfigs = {
-      overrides: allModels.map((model) => ({
-        match: { model },
-        modelConfig: {
-          generateContentConfig: {
-            thinkingConfig: {
-              thinkingBudget: config.agent.thinkingBudget,
+    return {
+      model: baseModel,
+      modelConfigs: {
+        overrides: allModels.map((model) => ({
+          match: { model },
+          modelConfig: {
+            generateContentConfig: {
+              thinkingConfig: {
+                thinkingBudget: config.agent.thinkingBudget,
+              },
             },
           },
-        },
-      })),
+        })),
+      },
     };
   }
 
-  return settings;
+  return { model: baseModel };
 }
 
 export function computeAttemptTimeoutMs(remainingMs: number, remainingModels: number) {
@@ -416,14 +421,14 @@ function withTemporaryGeminiSettings<T>(
 function invokeAgentWithFallback(params: {
   readonly config: PrFlowConfig;
   readonly prompt: string;
-  readonly cwd: string;
-  readonly outputDir: string;
+  readonly paths: RunnerPaths;
   readonly promptPath: string;
   readonly resultPath: string;
   readonly deadlineMs: number;
   readonly resetOnFallback: boolean;
 }) {
-  const { config, prompt, cwd, outputDir, promptPath, resultPath, deadlineMs, resetOnFallback } = params;
+  const { config, prompt, paths, promptPath, resultPath, deadlineMs, resetOnFallback } = params;
+  const { cwd } = paths;
   fs.writeFileSync(promptPath, prompt, 'utf-8');
 
   const nodeOpts = [process.env.NODE_OPTIONS, '--dns-result-order=ipv4first']
@@ -449,7 +454,7 @@ function invokeAgentWithFallback(params: {
       if (idx > 0) {
         console.error(`[pr-flow] Falling back to model "${modelName}" after error...`);
         if (resetOnFallback) {
-          resetWorkingTree(cwd, outputDir);
+          resetWorkingTree(paths);
         }
         if (fs.existsSync(resultPath)) fs.unlinkSync(resultPath);
       }
@@ -513,9 +518,9 @@ function invokeAgentWithFallback(params: {
   });
 }
 
-function collectWorkingTreeContext(cwd: string, outputDir: string) {
+function collectWorkingTreeContext(paths: RunnerPaths) {
   try {
-    const relOut = path.relative(cwd, outputDir);
+    const relOut = path.relative(paths.cwd, paths.outputDir);
     const excludeArgs = [
       ':(exclude)_pr_flow',
       ':(exclude).gemini',
@@ -526,12 +531,12 @@ function collectWorkingTreeContext(cwd: string, outputDir: string) {
     const trackedOut = execFileSync(
       'git',
       ['diff', '--name-only', 'HEAD', '--', '.', ...excludeArgs],
-      { cwd, encoding: 'utf-8' },
+      { cwd: paths.cwd, encoding: 'utf-8' },
     );
     const untrackedOut = execFileSync(
       'git',
       ['ls-files', '--others', '--exclude-standard', '--', '.', ...excludeArgs],
-      { cwd, encoding: 'utf-8' },
+      { cwd: paths.cwd, encoding: 'utf-8' },
     );
     const changedFiles = Array.from(
       new Set(
@@ -542,7 +547,7 @@ function collectWorkingTreeContext(cwd: string, outputDir: string) {
       ),
     );
     const rawDiff = execFileSync('git', ['diff', 'HEAD', '--', '.', ...excludeArgs], {
-      cwd,
+      cwd: paths.cwd,
       encoding: 'utf-8',
     });
     const MAX_DIFF_CHARS = 12_000;
@@ -556,17 +561,17 @@ function collectWorkingTreeContext(cwd: string, outputDir: string) {
   }
 }
 
-function exportChangesPatch(cwd: string, outputDir: string, patchPath: string) {
+function exportChangesPatch(paths: RunnerPaths, patchPath: string) {
   try {
-    execFileSync('git', ['add', '-A'], { cwd, stdio: 'pipe' });
-    const relOut = path.relative(cwd, outputDir);
+    execFileSync('git', ['add', '-A'], { cwd: paths.cwd, stdio: 'pipe' });
+    const relOut = path.relative(paths.cwd, paths.outputDir);
     if (relOut && !relOut.startsWith('..') && !path.isAbsolute(relOut)) {
-      execFileSync('git', ['reset', '-q', '--', relOut], { cwd, stdio: 'pipe' });
+      execFileSync('git', ['reset', '-q', '--', relOut], { cwd: paths.cwd, stdio: 'pipe' });
     }
-    if (fs.existsSync(path.join(cwd, '_pr_flow'))) {
-      execFileSync('git', ['reset', '-q', '--', '_pr_flow'], { cwd, stdio: 'pipe' });
+    if (fs.existsSync(path.join(paths.cwd, '_pr_flow'))) {
+      execFileSync('git', ['reset', '-q', '--', '_pr_flow'], { cwd: paths.cwd, stdio: 'pipe' });
     }
-    const diff = execFileSync('git', ['diff', '--cached', '--binary'], { cwd, encoding: 'utf-8' });
+    const diff = execFileSync('git', ['diff', '--cached', '--binary'], { cwd: paths.cwd, encoding: 'utf-8' });
     fs.writeFileSync(patchPath, diff, 'utf-8');
     return E.right<DomainError, boolean>(diff.trim().length > 0);
   } catch (err) {
@@ -584,6 +589,7 @@ export function runAgentExecution(params: {
   outputDir: string;
 }) {
   const { config, prompt, cwd, outputDir } = params;
+  const paths: RunnerPaths = { cwd, outputDir };
   fs.mkdirSync(outputDir, { recursive: true });
 
   const promptPath = path.join(outputDir, 'prompt.md');
@@ -596,8 +602,8 @@ export function runAgentExecution(params: {
       return E.left<DomainError, AgentRunOutput>({
         type: 'AGENT_EXECUTION_ERROR',
         message: isoMessage.wrap(`Workspace setupCommand failed: ${setup.output}`),
-        exitCode: O.some(isoCount.wrap(setup.status)),
-        retryability: O.none,
+        exitCode: { kind: 'code', value: isoCount.wrap(setup.status) },
+        retryability: 'fatal',
       });
     }
   }
@@ -607,8 +613,7 @@ export function runAgentExecution(params: {
   const { parsedResult, lastRun } = invokeAgentWithFallback({
     config,
     prompt,
-    cwd,
-    outputDir,
+    paths,
     promptPath,
     resultPath,
     deadlineMs,
@@ -620,8 +625,8 @@ export function runAgentExecution(params: {
     return E.left<DomainError, AgentRunOutput>({
       type: 'AGENT_EXECUTION_ERROR',
       message: isoMessage.wrap(`Agent CLI exited with code ${String(lastRun.status)}: ${lastRun.output.slice(-1500)}`),
-      exitCode: O.some(isoCount.wrap(lastRun.status)),
-      retryability: O.some(retryable ? 'retryable' : 'fatal'),
+      exitCode: { kind: 'code', value: isoCount.wrap(lastRun.status) },
+      retryability: retryable ? 'retryable' : 'fatal',
     });
   }
 
@@ -654,13 +659,15 @@ export function runAgentExecution(params: {
       `[pr-flow] verifyCommand (${config.workspace.verifyCommand}) failed; starting fix attempt ${String(verifyFixAttempt)}/${String(maxVerifyRetries)}...`,
     );
 
-    const { changedFiles, currentDiff } = collectWorkingTreeContext(cwd, outputDir);
+    const { changedFiles, currentDiff } = collectWorkingTreeContext(paths);
     const fixPrompt = buildVerifyFixPrompt({
-      verifyCommand: config.workspace.verifyCommand,
+      execution: {
+        verifyCommand: config.workspace.verifyCommand,
+        resultFilePath: resultPath,
+      },
       verifyOutput: verify.output.slice(-8000),
       attempt: verifyFixAttempt,
       maxAttempts: maxVerifyRetries,
-      resultFilePath: resultPath,
       changedFiles,
       currentDiff,
       previousResolvedComments: latestResult?.resolvedComments,
@@ -673,8 +680,7 @@ export function runAgentExecution(params: {
     const fixRun = invokeAgentWithFallback({
       config,
       prompt: fixPrompt,
-      cwd,
-      outputDir,
+      paths,
       promptPath,
       resultPath,
       deadlineMs,
@@ -682,7 +688,7 @@ export function runAgentExecution(params: {
     });
 
     if (fixRun.parsedResult?.status === 'needs_human') {
-      const patchExport = exportChangesPatch(cwd, outputDir, patchPath);
+      const patchExport = exportChangesPatch(paths, patchPath);
       if (E.isLeft(patchExport)) return patchExport;
       fs.writeFileSync(resultPath, JSON.stringify(fixRun.parsedResult, null, 2), 'utf-8');
       return E.right<DomainError, AgentRunOutput>({
@@ -710,7 +716,7 @@ export function runAgentExecution(params: {
     verify = runShell(config.workspace.verifyCommand, cwd);
   }
 
-  const patchExport = exportChangesPatch(cwd, outputDir, patchPath);
+  const patchExport = exportChangesPatch(paths, patchPath);
   if (E.isLeft(patchExport)) {
     return patchExport;
   }

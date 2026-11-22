@@ -1,6 +1,6 @@
 import * as E from 'fp-ts/lib/Either';
-import * as O from 'fp-ts/lib/Option';
 import * as TE from 'fp-ts/lib/TaskEither';
+import { match } from 'ts-pattern';
 import { describe, expect, it, vi } from 'vitest';
 import type { GitHubPort, ManagedPrSummary } from '../src/adapters/github/types.js';
 import {
@@ -20,18 +20,22 @@ import {
 function makeIssue(num: number, overrides: Partial<IssueNode> = {}) {
   return {
     number: isoIssueNumber.wrap(num),
-    title: isoTitle.wrap(`Issue #${String(num)}`),
-    body: isoBody.wrap(''),
+    content: {
+      title: isoTitle.wrap(`Issue #${String(num)}`),
+      body: isoBody.wrap(''),
+      labels: [isoLabelName.wrap('type:task'), isoLabelName.wrap('ai-managed')],
+    },
     state: 'open' as const,
     status: 'backlog' as const,
     type: 'task' as const,
-    labels: [isoLabelName.wrap('type:task'), isoLabelName.wrap('ai-managed')],
     subIssueNumbers: [],
     blockedByNumbers: [],
     blockingNumbers: [],
-    linkedPrNumber: O.none,
-    parentNumber: O.none,
-    updatedAt: isoIsoTimestamp.wrap('2026-11-20T00:00:00Z'),
+    links: {
+      linkedPr: { kind: 'none' },
+      parent: { kind: 'root' },
+    },
+    lastUpdatedAt: isoIsoTimestamp.wrap('2026-11-20T00:00:00Z'),
     ...overrides,
   } satisfies IssueNode;
 }
@@ -110,12 +114,13 @@ describe('recomputeContainerRollups', () => {
         [4, makeIssue(4, { type: 'task', status: 'fixed', state: 'closed' })],
       ]),
       {
-      listSubIssues: vi.fn((num: number) => {
-        if (num === 1) return TE.right([2]);
-        if (num === 2) return TE.right([4]);
-        return TE.right([]);
-      }),
-      setIssueStatus: vi.fn((num: number, status: string) => {
+      listSubIssues: vi.fn((num: number) =>
+        match(num)
+          .with(1, () => TE.right([2]))
+          .with(2, () => TE.right([4]))
+          .otherwise(() => TE.right([])),
+      ),
+      updateIssueStatus: vi.fn((num: number, status: string) => {
         recordedStatus = [...recordedStatus, [num, status]];
         return TE.right(undefined);
       }),
@@ -127,14 +132,19 @@ describe('recomputeContainerRollups', () => {
     } as Partial<GitHubPort> as GitHubPort);
 
     expect(E.isRight(res)).toBe(true);
-    if (E.isRight(res)) {
-      expect(res.right.rolledUp).toBe(2);
-      expect(res.right.containerNumbers.has(1)).toBe(true);
-      expect(res.right.containerNumbers.has(2)).toBe(true);
-      expect(res.right.containerNumbers.has(3)).toBe(false);
-      expect(res.right.byNumber.get(2)?.status).toBe('fixed');
-      expect(res.right.byNumber.get(1)?.status).toBe('fixed');
-    }
+    match(res)
+      .with({ _tag: 'Right' }, ({ right }) => {
+        expect(right.rolledUp).toBe(2);
+        expect(right.containerNumbers.has(1)).toBe(true);
+        expect(right.containerNumbers.has(2)).toBe(true);
+        expect(right.containerNumbers.has(3)).toBe(false);
+        expect(right.byNumber.get(2)?.status).toBe('fixed');
+        expect(right.byNumber.get(1)?.status).toBe('fixed');
+      })
+      .with({ _tag: 'Left' }, () => {
+        expect.unreachable('Expected Right');
+      })
+      .exhaustive();
 
     expect(recordedStatus).toEqual([
       [2, 'fixed'],

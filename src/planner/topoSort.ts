@@ -1,6 +1,8 @@
-import { pipe } from 'fp-ts/lib/function';
+import { flow, pipe } from 'fp-ts/lib/function';
 import * as O from 'fp-ts/lib/Option';
 import * as RA from 'fp-ts/lib/ReadonlyArray';
+import { match } from 'ts-pattern';
+import { isoPlanNodeId, type PlanNodeId } from '../domain/newtypes.js';
 import type { PlanIssueNode, PlanManifest } from '../domain/plan.js';
 
 type Graph = {
@@ -9,35 +11,119 @@ type Graph = {
   readonly adj: ReadonlyMap<string, ReadonlyArray<string>>;
 };
 
-const addEdge = (graph: Graph, from: string, to: string) => {
-  if (!graph.byId.has(from) || !graph.byId.has(to) || from === to) {
-    return graph;
-  }
-  const existing = graph.adj.get(from) ?? [];
-  if (existing.includes(to)) {
-    return graph;
-  }
+type Edge = {
+  readonly source: PlanNodeId;
+  readonly target: PlanNodeId;
+};
+
+type EdgeInsertion = {
+  readonly graph: Graph;
+  readonly edge: Edge;
+};
+
+const insertUniqueEdge = (
+  insertion: EdgeInsertion,
+  existing: ReadonlyArray<string>,
+) => {
+  const { graph, edge } = insertion;
   return {
     byId: graph.byId,
-    adj: new Map(graph.adj).set(from, [...existing, to]),
-    inDegree: new Map(graph.inDegree).set(to, (graph.inDegree.get(to) ?? 0) + 1),
+    adj: new Map(graph.adj).set(isoPlanNodeId.unwrap(edge.source), [
+      ...existing,
+      isoPlanNodeId.unwrap(edge.target),
+    ]),
+    inDegree: new Map(graph.inDegree).set(
+      isoPlanNodeId.unwrap(edge.target),
+      (graph.inDegree.get(isoPlanNodeId.unwrap(edge.target)) ?? 0) + 1,
+    ),
   };
 };
 
+const appendUniqueEdge = (insertion: EdgeInsertion) => {
+  const { graph, edge } = insertion;
+  const existing = graph.adj.get(isoPlanNodeId.unwrap(edge.source)) ?? [];
+  return pipe(edge.target, isoPlanNodeId.unwrap, (target) =>
+    match(existing.includes(target))
+      .with(true, () => graph)
+      .with(false, () => insertUniqueEdge(insertion, existing))
+      .exhaustive(),
+  );
+};
+
+const addEdge = (insertion: EdgeInsertion) => {
+  const { graph, edge } = insertion;
+  const source = isoPlanNodeId.unwrap(edge.source);
+  const target = isoPlanNodeId.unwrap(edge.target);
+  return match(
+    !graph.byId.has(source) ||
+      !graph.byId.has(target) ||
+      source === target,
+  )
+    .with(true, () => graph)
+    .with(false, () => appendUniqueEdge(insertion))
+    .exhaustive();
+};
+
+const addBlockedByEdges = (graph: Graph, issue: PlanIssueNode) =>
+  pipe(
+    issue.blockedBy,
+    RA.reduce(graph, (acc, dep) =>
+      addEdge({
+        graph: acc,
+        edge: { source: isoPlanNodeId.wrap(dep), target: isoPlanNodeId.wrap(issue.id) },
+      }),
+    ),
+  );
+
 const addIssueEdges = (graph: Graph, issue: PlanIssueNode) =>
   pipe(
-    issue.parentId ? addEdge(graph, issue.parentId, issue.id) : graph,
-    (g) => pipe(issue.blockedBy, RA.reduce(g, (acc, dep) => addEdge(acc, dep, issue.id))),
+    issue.parentId
+      ? addEdge({
+          graph,
+          edge: {
+            source: isoPlanNodeId.wrap(issue.parentId),
+            target: isoPlanNodeId.wrap(issue.id),
+          },
+        })
+      : graph,
+    (g) => addBlockedByEdges(g, issue),
   );
+
+const buildByIdMap = (issues: ReadonlyArray<PlanIssueNode>) =>
+  new Map(
+    pipe(
+      issues,
+      RA.map((i) => [i.id, i] as const),
+    ),
+  );
+
+const buildInDegreeMap = (issues: ReadonlyArray<PlanIssueNode>) =>
+  new Map(
+    pipe(
+      issues,
+      RA.map((i) => [i.id, 0] as const),
+    ),
+  );
+
+const buildAdjMap = (issues: ReadonlyArray<PlanIssueNode>) =>
+  new Map(
+    pipe(
+      issues,
+      RA.map((i) => [i.id, [] as ReadonlyArray<string>] as const),
+    ),
+  );
+
+const applyAllIssueEdges = (issues: ReadonlyArray<PlanIssueNode>) => (initial: Graph) =>
+  pipe(issues, RA.reduce(initial, addIssueEdges));
 
 const buildGraph = (manifest: PlanManifest) =>
   pipe(
     {
-      byId: new Map(pipe(manifest.issues, RA.map((i) => [i.id, i] as const))),
-      inDegree: new Map(pipe(manifest.issues, RA.map((i) => [i.id, 0] as const))),
-      adj: new Map(pipe(manifest.issues, RA.map((i) => [i.id, [] as ReadonlyArray<string>] as const))),
+      byId: buildByIdMap(manifest.issues),
+      inDegree: buildInDegreeMap(manifest.issues),
+      adj: buildAdjMap(manifest.issues),
     } satisfies Graph,
-    (initial) => pipe(manifest.issues, RA.reduce(initial, addIssueEdges)),
+    applyAllIssueEdges(manifest.issues),
   );
 
 const decrementNeighbors = (
@@ -74,7 +160,12 @@ const stepWithNode = (
     graph.adj.get(current) ?? [],
     inDegree,
   );
-  return kahnStep([...queue.slice(1), ...newlyReady], nextInDegree, graph, node ? [...acc, node] : acc);
+  return kahnStep(
+    [...queue.slice(1), ...newlyReady],
+    nextInDegree,
+    graph,
+    node ? [...acc, node] : acc,
+  );
 };
 
 const kahnStep: KahnStepFn = (queue, inDegree, graph, acc) =>
@@ -86,21 +177,20 @@ const kahnStep: KahnStepFn = (queue, inDegree, graph, acc) =>
     ),
   );
 
+const readyNodeIds = (inDegree: ReadonlyMap<string, number>) =>
+  pipe(
+    Array.from(inDegree.entries()),
+    RA.filterMap(([id, deg]) => (deg === 0 ? O.some(id) : O.none)),
+  );
+
+const runKahn = (graph: Graph) =>
+  pipe(readyNodeIds(graph.inDegree), (ready) =>
+    kahnStep(ready, graph.inDegree, graph, []),
+  );
+
 /**
  * Topologically sorts plan issues so that:
  * 1. Parent issues are created before their children.
  * 2. Blocking issues are ordered before the issues they block.
  */
-export function topoSortPlan(manifest: PlanManifest) {
-  return pipe(buildGraph(manifest), (graph) =>
-    kahnStep(
-      pipe(
-        Array.from(graph.inDegree.entries()),
-        RA.filterMap(([id, deg]) => (deg === 0 ? O.some(id) : O.none)),
-      ),
-      graph.inDegree,
-      graph,
-      [],
-    ),
-  );
-}
+export const topoSortPlan = flow(buildGraph, runKahn);

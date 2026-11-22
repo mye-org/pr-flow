@@ -11,8 +11,9 @@
     "typecheck": "tsc --noEmit",
     "lint": "strict-fp-lint",
     "test": "vitest run",
-    "verify": "npm run typecheck && npm run lint && npm run build && npm run test"
+    "verify": "pnpm run typecheck && pnpm run lint && pnpm run build && pnpm run test"
   },
+  "packageManager": "pnpm@12.21.0",
   "keywords": [
     "github-actions",
     "workflow",

@@ -1,0 +1,3 @@
+allowBuilds:
+  '@mye-org/eslint-plugin-strict-fp@https://codeload.github.com/mye-org/very-strict-ts-linter/tar.gz/11d3f9ee79db4b0d7e7d21068fabd345a74812ef': true
+  esbuild: true

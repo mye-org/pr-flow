@@ -39,6 +39,6 @@
 ## Development
 
 ```bash
-npm install
-npm run verify
+pnpm install
+pnpm run verify
 ```

@@ -202,7 +202,7 @@ importers:
     devDependencies:
       '@mye-org/eslint-plugin-strict-fp':
         specifier: git+https://github.com/mye-org/very-strict-ts-linter.git
-        version: https://codeload.github.com/mye-org/very-strict-ts-linter/tar.gz/11d3f9ee79db4b0d7e7d21068fabd345a74812ef(eslint@9.39.5(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3)
+        version: https://codeload.github.com/mye-org/very-strict-ts-linter/tar.gz/e1edf5f81d536d37a15373d78502142ad44a0409(eslint@9.39.5(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3)
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.5
@@ -463,8 +463,8 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
-  '@mye-org/eslint-plugin-strict-fp@https://codeload.github.com/mye-org/very-strict-ts-linter/tar.gz/11d3f9ee79db4b0d7e7d21068fabd345a74812ef':
-    resolution: {gitHosted: true, integrity: sha512-Wi5/x4g3gQO5vl+EwZ2DgQgoU4syqXgpVQ2/5Oge2XEZodoWM/WdvfIOeViGJtTQ/dRS2bIo0BYYxHL32S5KmQ==, tarball: https://codeload.github.com/mye-org/very-strict-ts-linter/tar.gz/11d3f9ee79db4b0d7e7d21068fabd345a74812ef}
+  '@mye-org/eslint-plugin-strict-fp@https://codeload.github.com/mye-org/very-strict-ts-linter/tar.gz/e1edf5f81d536d37a15373d78502142ad44a0409':
+    resolution: {gitHosted: true, integrity: sha512-9+QUReuBt7WvwYE9JR0vtLZpLGih2ErLR4BRPYE4ZMCC6Sagh3YP7XKqoSJpOuMLDc5q17ByTLE4rR++gBHTvw==, tarball: https://codeload.github.com/mye-org/very-strict-ts-linter/tar.gz/e1edf5f81d536d37a15373d78502142ad44a0409}
     version: 0.1.0
     hasBin: true
     peerDependencies:
@@ -1822,7 +1822,7 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.3
       '@jridgewell/sourcemap-codec': 1.6.0
 
-  '@mye-org/eslint-plugin-strict-fp@https://codeload.github.com/mye-org/very-strict-ts-linter/tar.gz/11d3f9ee79db4b0d7e7d21068fabd345a74812ef(eslint@9.39.5(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3)':
+  '@mye-org/eslint-plugin-strict-fp@https://codeload.github.com/mye-org/very-strict-ts-linter/tar.gz/e1edf5f81d536d37a15373d78502142ad44a0409(eslint@9.39.5(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3)':
     dependencies:
       '@typescript-eslint/utils': 8.73.0(eslint@9.39.5(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3)
       eslint: 9.39.5(jiti@2.7.0)(supports-color@7.2.0)

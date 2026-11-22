@@ -1,4 +1,4 @@
-import { pipe } from 'fp-ts/lib/function';
+import { flow } from 'fp-ts/lib/function';
 import * as RA from 'fp-ts/lib/ReadonlyArray';
 import { match } from 'ts-pattern';
 import type { IssueStatus, IssueType } from './issue.js';
@@ -67,29 +67,60 @@ export type DomainError =
   | { readonly type: 'GUARD_ERROR'; readonly guard: GuardError }
   | { readonly type: 'GIT_ERROR'; readonly message: Message };
 
-const formatWipLimit = (e: Extract<GuardError, { readonly type: 'WIP_LIMIT_REACHED' }>) =>
-  `WIP limit reached (${String(isoCount.unwrap(e.currentWip))}/${String(isoCount.unwrap(e.limit))} issues currently in progress).`;
+const formatWipLimitText = (currentWip: number, limit: number) =>
+  `WIP limit reached (${String(currentWip)}/${String(limit)} issues currently in progress).`;
 
-const formatBlockedDeps = (
-  e: Extract<GuardError, { readonly type: 'BLOCKED_BY_DEPENDENCIES' }>,
-) =>
-  `Issue is blocked by open dependencies: ${pipe(
-    e.blockingIssues,
-    RA.map((n) => `#${String(isoIssueNumber.unwrap(n))}`),
-  ).join(', ')}.`;
+function formatWipLimit(e: Extract<GuardError, { readonly type: 'WIP_LIMIT_REACHED' }>) {
+  return formatWipLimitText(isoCount.unwrap(e.currentWip), isoCount.unwrap(e.limit));
+}
 
-const formatNotLeaf = (
+const formatIssueRef = (issueNumber: number) => `#${String(issueNumber)}`;
+
+const joinIssueRefs = (refs: ReadonlyArray<string>) => refs.join(', ');
+
+const wrapBlockedDepsSentence = (list: string) =>
+  `Issue is blocked by open dependencies: ${list}.`;
+
+const formatBlockedDepsText = flow(
+  RA.map(formatIssueRef),
+  joinIssueRefs,
+  wrapBlockedDepsSentence,
+);
+
+const formatBlockedDeps = flow(
+  (e: Extract<GuardError, { readonly type: 'BLOCKED_BY_DEPENDENCIES' }>) => e.blockingIssues,
+  RA.map(isoIssueNumber.unwrap),
+  formatBlockedDepsText,
+);
+
+const formatNotLeafText = (issueNumber: number, issueType: IssueType, subIssueCount: number) =>
+  `Issue #${String(issueNumber)} (type=${issueType}, subIssues=${String(subIssueCount)}) is a container, not an executable leaf.`;
+
+function formatNotLeaf(
   e: Extract<GuardError, { readonly type: 'NOT_AN_EXECUTABLE_LEAF' }>,
-) =>
-  `Issue #${String(isoIssueNumber.unwrap(e.issueNumber))} (type=${e.issueType}, subIssues=${String(isoCount.unwrap(e.subIssueCount))}) is a container, not an executable leaf.`;
+) {
+  return formatNotLeafText(
+    isoIssueNumber.unwrap(e.issueNumber),
+    e.issueType,
+    isoCount.unwrap(e.subIssueCount),
+  );
+}
 
-const formatPrExists = (e: Extract<GuardError, { readonly type: 'PR_ALREADY_EXISTS' }>) =>
-  `Issue #${String(isoIssueNumber.unwrap(e.issueNumber))} already has ${String(isoCount.unwrap(e.existingPrCount))} open PR(s) (1-PR-per-issue rule).`;
+const formatPrExistsText = (issueNumber: number, existingPrCount: number) =>
+  `Issue #${String(issueNumber)} already has ${String(existingPrCount)} open PR(s) (1-PR-per-issue rule).`;
 
-const formatInvalidState = (
+function formatPrExists(e: Extract<GuardError, { readonly type: 'PR_ALREADY_EXISTS' }>) {
+  return formatPrExistsText(isoIssueNumber.unwrap(e.issueNumber), isoCount.unwrap(e.existingPrCount));
+}
+
+const formatInvalidStateText = (issueNumber: number, currentStatus: IssueStatus) =>
+  `Issue #${String(issueNumber)} is in state '${currentStatus}', which cannot be picked up automatically.`;
+
+function formatInvalidState(
   e: Extract<GuardError, { readonly type: 'INVALID_STATE_FOR_PICKUP' }>,
-) =>
-  `Issue #${String(isoIssueNumber.unwrap(e.issueNumber))} is in state '${e.currentStatus}', which cannot be picked up automatically.`;
+) {
+  return formatInvalidStateText(isoIssueNumber.unwrap(e.issueNumber), e.currentStatus);
+}
 
 export function formatGuardError(err: GuardError) {
   return isoMessage.wrap(

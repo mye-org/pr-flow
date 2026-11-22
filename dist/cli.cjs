@@ -3048,14 +3048,14 @@ var require_function = __commonJS({
     exports2.identity = identity2;
     exports2.constant = constant3;
     exports2.flip = flip;
-    exports2.flow = flow5;
+    exports2.flow = flow12;
     exports2.tuple = tuple3;
     exports2.increment = increment;
     exports2.decrement = decrement;
     exports2.absurd = absurd;
     exports2.tupled = tupled;
     exports2.untupled = untupled;
-    exports2.pipe = pipe16;
+    exports2.pipe = pipe7;
     exports2.not = not2;
     var getBooleanAlgebra = function(B2) {
       return function() {
@@ -3184,7 +3184,7 @@ var require_function = __commonJS({
         };
       };
     }
-    function flow5(ab, bc, cd, de, ef, fg, gh, hi, ij) {
+    function flow12(ab, bc, cd, de, ef, fg, gh, hi, ij) {
       switch (arguments.length) {
         case 1:
           return ab;
@@ -3253,7 +3253,7 @@ var require_function = __commonJS({
         return f(a2);
       };
     }
-    function pipe16(a2, ab, bc, cd, de, ef, fg, gh, hi) {
+    function pipe7(a2, ab, bc, cd, de, ef, fg, gh, hi) {
       switch (arguments.length) {
         case 1:
           return a2;
@@ -3295,7 +3295,7 @@ var require_function = __commonJS({
     var getEndomorphismMonoid = function() {
       return {
         concat: function(first2, second) {
-          return flow5(first2, second);
+          return flow12(first2, second);
         },
         empty: identity2
       };
@@ -4154,7 +4154,7 @@ var require_Either = __commonJS({
     exports2.match = exports2.foldW = exports2.matchW = exports2.isRight = exports2.isLeft = exports2.fromOption = exports2.fromPredicate = exports2.FromEither = exports2.MonadThrow = exports2.throwError = exports2.ChainRec = exports2.Extend = exports2.extend = exports2.Alt = exports2.alt = exports2.altW = exports2.Bifunctor = exports2.mapLeft = exports2.bimap = exports2.Traversable = exports2.sequence = exports2.traverse = exports2.Foldable = exports2.reduceRight = exports2.foldMap = exports2.reduce = exports2.Monad = exports2.Chain = exports2.Applicative = exports2.Apply = exports2.ap = exports2.apW = exports2.Pointed = exports2.of = exports2.asUnit = exports2.as = exports2.Functor = exports2.map = exports2.getAltValidation = exports2.getApplicativeValidation = exports2.getWitherable = exports2.getFilterable = exports2.getCompactable = exports2.getSemigroup = exports2.getEq = exports2.getShow = exports2.URI = exports2.flatMap = exports2.right = exports2.left = void 0;
     exports2.either = exports2.stringifyJSON = exports2.chainFirstW = exports2.chainFirst = exports2.chain = exports2.chainW = exports2.sequenceArray = exports2.traverseArray = exports2.traverseArrayWithIndex = exports2.traverseReadonlyArrayWithIndex = exports2.traverseReadonlyNonEmptyArrayWithIndex = exports2.ApT = exports2.apSW = exports2.apS = exports2.bindW = exports2.bind = exports2.let = exports2.bindTo = exports2.Do = exports2.exists = exports2.toUnion = exports2.chainNullableK = exports2.fromNullableK = exports2.tryCatchK = exports2.tryCatch = exports2.fromNullable = exports2.orElse = exports2.orElseW = exports2.swap = exports2.filterOrElseW = exports2.filterOrElse = exports2.flatMapOption = exports2.flatMapNullable = exports2.liftOption = exports2.liftNullable = exports2.chainOptionKW = exports2.chainOptionK = exports2.fromOptionK = exports2.duplicate = exports2.flatten = exports2.flattenW = exports2.tap = exports2.apSecondW = exports2.apSecond = exports2.apFirstW = exports2.apFirst = exports2.flap = exports2.getOrElse = exports2.getOrElseW = exports2.fold = void 0;
     exports2.getValidationMonoid = exports2.getValidationSemigroup = exports2.getApplyMonoid = exports2.getApplySemigroup = void 0;
-    exports2.toError = toError;
+    exports2.toError = toError3;
     exports2.elem = elem;
     exports2.parseJSON = parseJSON;
     exports2.getValidation = getValidation;
@@ -4590,7 +4590,7 @@ var require_Either = __commonJS({
     };
     exports2.chainNullableK = chainNullableK;
     exports2.toUnion = (0, exports2.foldW)(function_1.identity, function_1.identity);
-    function toError(e2) {
+    function toError3(e2) {
       try {
         return e2 instanceof Error ? e2 : new Error(String(e2));
       } catch (error62) {
@@ -12269,8 +12269,8 @@ ${ctx.indent}`;
         const vs0 = valueStr[0];
         const nl0 = valueStr.indexOf("\n");
         const hasNewline = nl0 !== -1;
-        const flow5 = ctx.inFlow ?? value.flow ?? value.items.length === 0;
-        if (hasNewline || !flow5) {
+        const flow12 = ctx.inFlow ?? value.flow ?? value.items.length === 0;
+        if (hasNewline || !flow12) {
           let hasPropsLine = false;
           if (hasNewline && (vs0 === "&" || vs0 === "!")) {
             let sp0 = valueStr.indexOf(" ");
@@ -12496,8 +12496,8 @@ var require_stringifyCollection = __commonJS({
     var stringify = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyCollection(collection, ctx, options) {
-      const flow5 = ctx.inFlow ?? collection.flow;
-      const stringify2 = flow5 ? stringifyFlowCollection : stringifyBlockCollection;
+      const flow12 = ctx.inFlow ?? collection.flow;
+      const stringify2 = flow12 ? stringifyFlowCollection : stringifyBlockCollection;
       return stringify2(collection, ctx, options);
     }
     function stringifyBlockCollection({ comment, items }, ctx, { blockItemPrefix, flowChars, itemIndent, onChompKeep, onComment }) {
@@ -14140,7 +14140,7 @@ var require_Document = __commonJS({
           options = replacer;
           replacer = void 0;
         }
-        const { aliasDuplicateObjects, anchorPrefix, flow: flow5, keepUndefined, onTagObj, tag } = options ?? {};
+        const { aliasDuplicateObjects, anchorPrefix, flow: flow12, keepUndefined, onTagObj, tag } = options ?? {};
         const { onAnchor, setAnchors, sourceObjects } = anchors.createNodeAnchors(
           this,
           // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
@@ -14156,7 +14156,7 @@ var require_Document = __commonJS({
           sourceObjects
         };
         const node2 = createNode.createNode(value, tag, ctx);
-        if (flow5 && identity2.isCollection(node2))
+        if (flow12 && identity2.isCollection(node2))
           node2.flow = true;
         setAnchors();
         return node2;
@@ -14404,7 +14404,7 @@ ${pointer}
 var require_resolve_props = __commonJS({
   "node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-props.js"(exports2) {
     "use strict";
-    function resolveProps(tokens, { flow: flow5, indicator, next, offset, onError, parentIndent, startOnNewline }) {
+    function resolveProps(tokens, { flow: flow12, indicator, next, offset, onError, parentIndent, startOnNewline }) {
       let spaceBefore = false;
       let atNewline = startOnNewline;
       let hasSpace = startOnNewline;
@@ -14433,7 +14433,7 @@ var require_resolve_props = __commonJS({
         }
         switch (token.type) {
           case "space":
-            if (!flow5 && (indicator !== "doc-start" || next?.type !== "flow-collection") && token.source.includes("	")) {
+            if (!flow12 && (indicator !== "doc-start" || next?.type !== "flow-collection") && token.source.includes("	")) {
               tab = token;
             }
             hasSpace = true;
@@ -14489,15 +14489,15 @@ var require_resolve_props = __commonJS({
             if (anchor2 || tag)
               onError(token, "BAD_PROP_ORDER", `Anchors and tags must be after the ${token.source} indicator`);
             if (found)
-              onError(token, "UNEXPECTED_TOKEN", `Unexpected ${token.source} in ${flow5 ?? "collection"}`);
+              onError(token, "UNEXPECTED_TOKEN", `Unexpected ${token.source} in ${flow12 ?? "collection"}`);
             found = token;
             atNewline = indicator === "seq-item-ind" || indicator === "explicit-key-ind";
             hasSpace = false;
             break;
           case "comma":
-            if (flow5) {
+            if (flow12) {
               if (comma)
-                onError(token, "UNEXPECTED_TOKEN", `Unexpected , in ${flow5}`);
+                onError(token, "UNEXPECTED_TOKEN", `Unexpected , in ${flow12}`);
               comma = token;
               atNewline = false;
               hasSpace = false;
@@ -18020,7 +18020,7 @@ var {
 
 // src/cli/main.ts
 var E8 = __toESM(require_Either(), 1);
-var import_function25 = __toESM(require_function(), 1);
+var import_function26 = __toESM(require_function(), 1);
 var TE4 = __toESM(require_TaskEither(), 1);
 
 // node_modules/.pnpm/zod@4.6.7/node_modules/zod/v4/classic/external.js
@@ -40102,11 +40102,12 @@ var STATUS_TO_FIELD_VALUE = {
   fixed: "fixed",
   needs_human: "needs-human"
 };
+var invertStatusEntries = (0, import_function14.flow)(
+  (record2) => RR.toEntries(record2),
+  RA.map(([status, value]) => [value, status])
+);
 var FIELD_VALUE_TO_STATUS = Object.fromEntries(
-  (0, import_function14.pipe)(
-    RR.toEntries(STATUS_TO_FIELD_VALUE),
-    RA.map(([status, value]) => [value, status])
-  )
+  invertStatusEntries(STATUS_TO_FIELD_VALUE)
 );
 var PR_FLOW_STATUS_OPTIONS = [
   {
@@ -40151,11 +40152,13 @@ var TYPE_TO_LABEL = {
   task: isoLabelName.wrap("type:task"),
   bug: isoLabelName.wrap("type:bug")
 };
+var labelEntryToType = ([type, label]) => [isoLabelName.unwrap(label), type];
+var invertTypeEntries = (0, import_function14.flow)(
+  (record2) => RR.toEntries(record2),
+  RA.map(labelEntryToType)
+);
 var LABEL_TO_TYPE = Object.fromEntries(
-  (0, import_function14.pipe)(
-    RR.toEntries(TYPE_TO_LABEL),
-    RA.map(([type, label]) => [isoLabelName.unwrap(label), type])
-  )
+  invertTypeEntries(TYPE_TO_LABEL)
 );
 var DEFAULT_LABELS = [
   {
@@ -40187,23 +40190,23 @@ var DEFAULT_LABELS = [
 function isExecutableLeaf(issue2) {
   return M(issue2.type).with("task", "bug", () => true).with("story", () => issue2.subIssueNumbers.length === 0).with("epic", () => false).exhaustive();
 }
-function branchNameForIssue(issueNumber) {
-  return isoBranchName.wrap(`ai/issue-${String(isoIssueNumber.unwrap(issueNumber))}`);
-}
-function extractStatusFromFieldValue(value) {
-  return (0, import_function14.pipe)(
-    value,
-    O2.flatMap((v2) => O2.fromNullable(FIELD_VALUE_TO_STATUS[v2])),
-    O2.getOrElseW(() => "backlog")
-  );
-}
-function extractTypeFromLabels(labels) {
-  return (0, import_function14.pipe)(
-    labels,
-    RA.findFirstMap((label) => O2.fromNullable(LABEL_TO_TYPE[isoLabelName.unwrap(label)])),
-    O2.getOrElseW(() => "task")
-  );
-}
+var formatIssueBranchName = (issueNumber) => `ai/issue-${String(issueNumber)}`;
+var branchNameForIssue = (0, import_function14.flow)(
+  isoIssueNumber.unwrap,
+  formatIssueBranchName,
+  isoBranchName.wrap
+);
+var lookupStatusByValue = (value) => O2.fromNullable(FIELD_VALUE_TO_STATUS[value]);
+var extractStatusFromFieldValue = (0, import_function14.flow)(
+  O2.flatMap(lookupStatusByValue),
+  O2.getOrElseW(() => "backlog")
+);
+var lookupTypeByLabelName = (labelName) => O2.fromNullable(LABEL_TO_TYPE[labelName]);
+var lookupTypeByLabel = (0, import_function14.flow)(isoLabelName.unwrap, lookupTypeByLabelName);
+var extractTypeFromLabels = (0, import_function14.flow)(
+  RA.findFirstMap(lookupTypeByLabel),
+  O2.getOrElseW(() => "task")
+);
 var ResolvedCommentSchema = external_exports.object({
   threadId: external_exports.string().min(1),
   reply: external_exports.string().min(1)
@@ -45752,6 +45755,28 @@ var PrFlowConfigSchema = external_exports.object({
     mergeMethod: external_exports.enum(["squash", "merge", "rebase"]).default("squash")
   }).prefault({})
 });
+var formatZodIssue = (issue2) => `${issue2.path.join(".")}: ${issue2.message}`;
+var joinIssueMessages = (parts) => parts.join("; ");
+var prefixInvalidConfig = (detail) => `Invalid pr-flow.config.yml: ${detail}`;
+var formatInvalidConfigMessage = (0, import_function16.flow)(
+  RA2.map(formatZodIssue),
+  joinIssueMessages,
+  prefixInvalidConfig
+);
+var toInvalidConfigError = (issues) => ({
+  type: "CONFIG_ERROR",
+  message: isoMessage.wrap(formatInvalidConfigMessage(issues))
+});
+var formatParseConfigMessage = (errMessage) => `Failed to parse pr-flow.config.yml: ${errMessage}`;
+var toParseConfigError = (errMessage) => ({
+  type: "CONFIG_ERROR",
+  message: isoMessage.wrap(formatParseConfigMessage(errMessage))
+});
+var buildParseConfigError = (0, import_function16.flow)(
+  E2.toError,
+  (err) => err.message,
+  toParseConfigError
+);
 var validateCustomAgentCommand = (config2) => M(config2.agent.provider === "custom" && !config2.agent.command).with(
   true,
   () => E2.left({
@@ -45761,42 +45786,50 @@ var validateCustomAgentCommand = (config2) => M(config2.agent.provider === "cust
 ).with(false, () => E2.right(config2)).exhaustive();
 var validateConfigSchema = (parsed) => M(parsed).with({ success: true }, ({ data }) => validateCustomAgentCommand(data)).with(
   { success: false },
-  ({ error: error62 }) => E2.left({
-    type: "CONFIG_ERROR",
-    message: isoMessage.wrap(
-      `Invalid pr-flow.config.yml: ${(0, import_function16.pipe)(
-        error62.issues,
-        RA2.map((i2) => `${i2.path.join(".")}: ${i2.message}`)
-      ).join("; ")}`
-    )
-  })
+  ({ error: error62 }) => E2.left(toInvalidConfigError(error62.issues))
 ).exhaustive();
-function parseConfig(yamlContent) {
-  return (0, import_function16.pipe)(
-    E2.tryCatch(
-      () => PrFlowConfigSchema.safeParse((0, import_yaml.parse)(yamlContent)),
-      (err) => ({
-        type: "CONFIG_ERROR",
-        message: isoMessage.wrap(
-          `Failed to parse pr-flow.config.yml: ${err instanceof Error ? err.message : String(err)}`
-        )
-      })
-    ),
-    E2.flatMap(validateConfigSchema)
-  );
-}
+var tryParseConfigYaml = (yamlContent) => E2.tryCatch(
+  () => PrFlowConfigSchema.safeParse((0, import_yaml.parse)(yamlContent)),
+  buildParseConfigError
+);
+var parseConfig = (0, import_function16.flow)(tryParseConfigYaml, E2.flatMap(validateConfigSchema));
 
 // src/domain/errors.ts
 var import_function17 = __toESM(require_function(), 1);
 var RA3 = __toESM(require_ReadonlyArray(), 1);
-var formatWipLimit = (e2) => `WIP limit reached (${String(isoCount.unwrap(e2.currentWip))}/${String(isoCount.unwrap(e2.limit))} issues currently in progress).`;
-var formatBlockedDeps = (e2) => `Issue is blocked by open dependencies: ${(0, import_function17.pipe)(
-  e2.blockingIssues,
-  RA3.map((n2) => `#${String(isoIssueNumber.unwrap(n2))}`)
-).join(", ")}.`;
-var formatNotLeaf = (e2) => `Issue #${String(isoIssueNumber.unwrap(e2.issueNumber))} (type=${e2.issueType}, subIssues=${String(isoCount.unwrap(e2.subIssueCount))}) is a container, not an executable leaf.`;
-var formatPrExists = (e2) => `Issue #${String(isoIssueNumber.unwrap(e2.issueNumber))} already has ${String(isoCount.unwrap(e2.existingPrCount))} open PR(s) (1-PR-per-issue rule).`;
-var formatInvalidState = (e2) => `Issue #${String(isoIssueNumber.unwrap(e2.issueNumber))} is in state '${e2.currentStatus}', which cannot be picked up automatically.`;
+var formatWipLimitText = (currentWip, limit) => `WIP limit reached (${String(currentWip)}/${String(limit)} issues currently in progress).`;
+function formatWipLimit(e2) {
+  return formatWipLimitText(isoCount.unwrap(e2.currentWip), isoCount.unwrap(e2.limit));
+}
+var formatIssueRef = (issueNumber) => `#${String(issueNumber)}`;
+var joinIssueRefs = (refs) => refs.join(", ");
+var wrapBlockedDepsSentence = (list) => `Issue is blocked by open dependencies: ${list}.`;
+var formatBlockedDepsText = (0, import_function17.flow)(
+  RA3.map(formatIssueRef),
+  joinIssueRefs,
+  wrapBlockedDepsSentence
+);
+var formatBlockedDeps = (0, import_function17.flow)(
+  (e2) => e2.blockingIssues,
+  RA3.map(isoIssueNumber.unwrap),
+  formatBlockedDepsText
+);
+var formatNotLeafText = (issueNumber, issueType, subIssueCount) => `Issue #${String(issueNumber)} (type=${issueType}, subIssues=${String(subIssueCount)}) is a container, not an executable leaf.`;
+function formatNotLeaf(e2) {
+  return formatNotLeafText(
+    isoIssueNumber.unwrap(e2.issueNumber),
+    e2.issueType,
+    isoCount.unwrap(e2.subIssueCount)
+  );
+}
+var formatPrExistsText = (issueNumber, existingPrCount) => `Issue #${String(issueNumber)} already has ${String(existingPrCount)} open PR(s) (1-PR-per-issue rule).`;
+function formatPrExists(e2) {
+  return formatPrExistsText(isoIssueNumber.unwrap(e2.issueNumber), isoCount.unwrap(e2.existingPrCount));
+}
+var formatInvalidStateText = (issueNumber, currentStatus) => `Issue #${String(issueNumber)} is in state '${currentStatus}', which cannot be picked up automatically.`;
+function formatInvalidState(e2) {
+  return formatInvalidStateText(isoIssueNumber.unwrap(e2.issueNumber), e2.currentStatus);
+}
 function formatGuardError(err) {
   return isoMessage.wrap(
     M(err).with({ type: "WIP_LIMIT_REACHED" }, formatWipLimit).with({ type: "BLOCKED_BY_DEPENDENCIES" }, formatBlockedDeps).with({ type: "NOT_AN_EXECUTABLE_LEAF" }, formatNotLeaf).with({ type: "PR_ALREADY_EXISTS" }, formatPrExists).with({ type: "INVALID_STATE_FOR_PICKUP" }, formatInvalidState).exhaustive()
@@ -45827,35 +45860,29 @@ var PlanManifestSchema = external_exports.object({
   }).optional(),
   issues: external_exports.array(PlanIssueNodeSchema).min(1)
 });
+var formatPlanIssueText = (issue2) => `${issue2.path.join(".")}: ${issue2.message}`;
+var toPlanIssueMessage = (0, import_function18.flow)(formatPlanIssueText, isoMessage.wrap);
 var validatePlanSchema = (parsed) => M(parsed).with({ success: true }, ({ data }) => E3.right(data)).with(
   { success: false },
   ({ error: error62 }) => E3.left({
     type: "PLAN_VALIDATION_ERROR",
     message: isoMessage.wrap("Invalid plan manifest YAML"),
-    details: (0, import_function18.pipe)(
-      error62.issues,
-      RA4.map((i2) => isoMessage.wrap(`${i2.path.join(".")}: ${i2.message}`))
-    )
+    details: RA4.map(toPlanIssueMessage)(error62.issues)
   })
 ).exhaustive();
 var parsePlanYaml = (0, import_function18.flow)(
   (s2) => (0, import_yaml2.parse)(s2),
   (raw) => PlanManifestSchema.safeParse(raw)
 );
+var formatPlanYamlErrorMessage = (errMessage) => `Failed to parse plan manifest YAML: ${errMessage}`;
 var formatPlanYamlError = (errMessage) => ({
   type: "PLAN_VALIDATION_ERROR",
-  message: isoMessage.wrap(`Failed to parse plan manifest YAML: ${errMessage}`),
+  message: isoMessage.wrap(formatPlanYamlErrorMessage(errMessage)),
   details: []
 });
-function parsePlanManifest(yamlContent) {
-  return (0, import_function18.pipe)(
-    E3.tryCatch(
-      () => parsePlanYaml(yamlContent),
-      (err) => formatPlanYamlError(err instanceof Error ? err.message : String(err))
-    ),
-    E3.flatMap(validatePlanSchema)
-  );
-}
+var toPlanYamlError = (0, import_function18.flow)(E3.toError, (err) => err.message, formatPlanYamlError);
+var tryParsePlanYaml = (yamlContent) => E3.tryCatch(() => parsePlanYaml(yamlContent), toPlanYamlError);
+var parsePlanManifest = (0, import_function18.flow)(tryParsePlanYaml, E3.flatMap(validatePlanSchema));
 
 // src/interpreter/executeEffects.ts
 var import_function19 = __toESM(require_function(), 1);
@@ -45944,16 +45971,17 @@ var checkWipLimit = (ctx) => E4.fromPredicate(
     limit: c2.wipLimit
   })
 )(ctx);
-function checkPickupEligibility(ctx) {
-  return (0, import_function20.pipe)(
-    checkLeaf(ctx),
-    E4.flatMap(checkReadyState),
-    E4.flatMap(checkBlockers),
-    E4.flatMap(checkNoOpenPr),
-    E4.flatMap(checkWipLimit),
-    E4.map(() => "eligible")
-  );
-}
+var checkPickupEligibility = (0, import_function20.flow)(
+  checkLeaf,
+  E4.flatMap(checkReadyState),
+  E4.flatMap(checkBlockers),
+  E4.flatMap(checkNoOpenPr),
+  E4.flatMap(checkWipLimit),
+  E4.map(() => "eligible")
+);
+
+// src/machine/issueMachine.ts
+var import_function21 = __toESM(require_function(), 1);
 
 // node_modules/.pnpm/xstate@5.33.4/node_modules/xstate/dist/xstate-dev.esm.js
 function getGlobal() {
@@ -49185,6 +49213,75 @@ function appendEffect(effects, next) {
 var hasPickupCapacity = (e2) => e2.leafKind === "leaf" && e2.blockerState === "all_closed" && isoCount.unwrap(e2.openPrCount) === 0 && isoCount.unwrap(e2.wipCount) < isoCount.unwrap(e2.wipLimit);
 var canPickupEvent = (event) => event.type === "PICKUP_REQUESTED" ? hasPickupCapacity(event) : false;
 var canRetryEvent = (event) => event.type === "TRANSIENT_EXECUTION_FAILED" ? isoCount.unwrap(event.retryCount) < isoCount.unwrap(event.maxRetries) : false;
+var appendCommentEffect = (context, body) => ({
+  effects: appendEffect(context.effects, {
+    type: "ADD_COMMENT",
+    issueNumber: context.issueNumber,
+    body
+  })
+});
+var formatLabeledDetail = (headline, label, detail) => `${headline}
+
+**${label}:** ${detail}`;
+var buildLabeledBody = (headline, label, detail) => (0, import_function21.flow)(
+  isoMessage.unwrap,
+  (detailText) => formatLabeledDetail(headline, label, detailText),
+  isoBody.wrap
+)(detail);
+var buildBodyWithReason = (headline, reason) => buildLabeledBody(headline, "Reason", reason);
+var formatPrOpenedHeadline = (prNumber, branch) => `PR #${String(prNumber)} opened on branch \`${branch}\`.`;
+function buildPrOpenedHeadline(event) {
+  return formatPrOpenedHeadline(
+    isoPrNumber.unwrap(event.prNumber),
+    isoBranchName.unwrap(event.branch)
+  );
+}
+function buildPrOpenedBody(event) {
+  return buildLabeledBody(buildPrOpenedHeadline(event), "Summary", event.summary);
+}
+var buildExecutionFailedBody = (event) => buildBodyWithReason(
+  "Automated execution failed and requires human intervention.",
+  event.reason
+);
+var formatTransientRetryHeadline = (attempt, maxRetries) => `<!-- pr-flow:retries=${String(attempt)} -->
+Transient agent API error (attempt ${String(attempt)}/${String(maxRetries)}); re-queued \`pr-flow-status\` to \`ready\` for automatic retry.`;
+function buildTransientRetryHeadline(event) {
+  return formatTransientRetryHeadline(
+    isoCount.unwrap(event.retryCount) + 1,
+    isoCount.unwrap(event.maxRetries)
+  );
+}
+function buildTransientRetryBody(event) {
+  return buildBodyWithReason(buildTransientRetryHeadline(event), event.reason);
+}
+var formatTransientExhaustedHeadline = (maxRetries) => `Automated execution failed after ${String(maxRetries)} transient retries and requires human intervention.`;
+function buildTransientExhaustedHeadline(event) {
+  return formatTransientExhaustedHeadline(isoCount.unwrap(event.maxRetries));
+}
+function buildTransientExhaustedBody(event) {
+  return buildBodyWithReason(buildTransientExhaustedHeadline(event), event.reason);
+}
+var buildNeedsHumanBody = (event) => buildBodyWithReason("AI agent requested human clarification.", event.reason);
+var formatReviewTransientRetryHeadline = (attempt, maxRetries) => `<!-- pr-flow:retries=${String(attempt)} -->
+Transient agent API error during review follow-up (attempt ${String(attempt)}/${String(maxRetries)}); keeping \`pr-flow-status\` in \`review-pending\`.`;
+function buildReviewTransientRetryHeadline(event) {
+  return formatReviewTransientRetryHeadline(
+    isoCount.unwrap(event.retryCount) + 1,
+    isoCount.unwrap(event.maxRetries)
+  );
+}
+function buildReviewTransientRetryBody(event) {
+  return buildBodyWithReason(buildReviewTransientRetryHeadline(event), event.reason);
+}
+var formatReviewTransientExhaustedHeadline = (maxRetries) => `Review follow-up failed after ${String(maxRetries)} transient retries.`;
+function buildReviewTransientExhaustedHeadline(event) {
+  return formatReviewTransientExhaustedHeadline(isoCount.unwrap(event.maxRetries));
+}
+function buildReviewTransientExhaustedBody(event) {
+  return buildBodyWithReason(buildReviewTransientExhaustedHeadline(event), event.reason);
+}
+var buildReviewFailedBody = (event) => buildBodyWithReason("Review follow-up failed.", event.reason);
+var buildReviewNeedsHumanBody = (event) => buildBodyWithReason("Review follow-up requested human intervention.", event.reason);
 var issueMachine = setup({
   types: {
     context: {},
@@ -49203,13 +49300,9 @@ var issueMachine = setup({
         transition: { kind: "transition", from: params.from, to: params.to }
       })
     })),
-    emitComment: assign(({ context }, params) => ({
-      effects: appendEffect(context.effects, {
-        type: "ADD_COMMENT",
-        issueNumber: context.issueNumber,
-        body: params.body
-      })
-    })),
+    emitComment: assign(
+      ({ context }, params) => appendCommentEffect(context, params.body)
+    ),
     emitCloseIssue: assign(({ context }) => ({
       effects: appendEffect(context.effects, {
         type: "CLOSE_ISSUE",
@@ -49289,34 +49382,16 @@ var issueMachine = setup({
           target: "review_pending",
           actions: [
             { type: "emitStatusFieldSet", params: { from: "in_progress", to: "review_pending" } },
-            assign(({ context, event }) => ({
-              effects: appendEffect(context.effects, {
-                type: "ADD_COMMENT",
-                issueNumber: context.issueNumber,
-                body: isoBody.wrap(
-                  `PR #${String(isoPrNumber.unwrap(event.prNumber))} opened on branch \`${isoBranchName.unwrap(event.branch)}\`.
-
-**Summary:** ${isoMessage.unwrap(event.summary)}`
-                )
-              })
-            }))
+            assign(({ context, event }) => appendCommentEffect(context, buildPrOpenedBody(event)))
           ]
         },
         EXECUTION_FAILED: {
           target: "needs_human",
           actions: [
             { type: "emitStatusFieldSet", params: { from: "in_progress", to: "needs_human" } },
-            assign(({ context, event }) => ({
-              effects: appendEffect(context.effects, {
-                type: "ADD_COMMENT",
-                issueNumber: context.issueNumber,
-                body: isoBody.wrap(
-                  `Automated execution failed and requires human intervention.
-
-**Reason:** ${isoMessage.unwrap(event.reason)}`
-                )
-              })
-            }))
+            assign(
+              ({ context, event }) => appendCommentEffect(context, buildExecutionFailedBody(event))
+            )
           ]
         },
         TRANSIENT_EXECUTION_FAILED: [
@@ -49325,35 +49400,18 @@ var issueMachine = setup({
             target: "ready",
             actions: [
               { type: "emitStatusFieldSet", params: { from: "in_progress", to: "ready" } },
-              assign(({ context, event }) => ({
-                effects: appendEffect(context.effects, {
-                  type: "ADD_COMMENT",
-                  issueNumber: context.issueNumber,
-                  body: isoBody.wrap(
-                    `<!-- pr-flow:retries=${String(isoCount.unwrap(event.retryCount) + 1)} -->
-Transient agent API error (attempt ${String(isoCount.unwrap(event.retryCount) + 1)}/${String(isoCount.unwrap(event.maxRetries))}); re-queued \`pr-flow-status\` to \`ready\` for automatic retry.
-
-**Reason:** ${isoMessage.unwrap(event.reason)}`
-                  )
-                })
-              }))
+              assign(
+                ({ context, event }) => appendCommentEffect(context, buildTransientRetryBody(event))
+              )
             ]
           },
           {
             target: "needs_human",
             actions: [
               { type: "emitStatusFieldSet", params: { from: "in_progress", to: "needs_human" } },
-              assign(({ context, event }) => ({
-                effects: appendEffect(context.effects, {
-                  type: "ADD_COMMENT",
-                  issueNumber: context.issueNumber,
-                  body: isoBody.wrap(
-                    `Automated execution failed after ${String(isoCount.unwrap(event.maxRetries))} transient retries and requires human intervention.
-
-**Reason:** ${isoMessage.unwrap(event.reason)}`
-                  )
-                })
-              }))
+              assign(
+                ({ context, event }) => appendCommentEffect(context, buildTransientExhaustedBody(event))
+              )
             ]
           }
         ],
@@ -49361,17 +49419,7 @@ Transient agent API error (attempt ${String(isoCount.unwrap(event.retryCount) + 
           target: "needs_human",
           actions: [
             { type: "emitStatusFieldSet", params: { from: "in_progress", to: "needs_human" } },
-            assign(({ context, event }) => ({
-              effects: appendEffect(context.effects, {
-                type: "ADD_COMMENT",
-                issueNumber: context.issueNumber,
-                body: isoBody.wrap(
-                  `AI agent requested human clarification.
-
-**Reason:** ${isoMessage.unwrap(event.reason)}`
-                )
-              })
-            }))
+            assign(({ context, event }) => appendCommentEffect(context, buildNeedsHumanBody(event)))
           ]
         },
         PR_MERGED: {
@@ -49400,34 +49448,17 @@ Transient agent API error (attempt ${String(isoCount.unwrap(event.retryCount) + 
           {
             guard: "canRetry",
             target: "review_pending",
-            actions: assign(({ context, event }) => ({
-              effects: appendEffect(context.effects, {
-                type: "ADD_COMMENT",
-                issueNumber: context.issueNumber,
-                body: isoBody.wrap(
-                  `<!-- pr-flow:retries=${String(isoCount.unwrap(event.retryCount) + 1)} -->
-Transient agent API error during review follow-up (attempt ${String(isoCount.unwrap(event.retryCount) + 1)}/${String(isoCount.unwrap(event.maxRetries))}); keeping \`pr-flow-status\` in \`review-pending\`.
-
-**Reason:** ${isoMessage.unwrap(event.reason)}`
-                )
-              })
-            }))
+            actions: assign(
+              ({ context, event }) => appendCommentEffect(context, buildReviewTransientRetryBody(event))
+            )
           },
           {
             target: "needs_human",
             actions: [
               { type: "emitStatusFieldSet", params: { from: "review_pending", to: "needs_human" } },
-              assign(({ context, event }) => ({
-                effects: appendEffect(context.effects, {
-                  type: "ADD_COMMENT",
-                  issueNumber: context.issueNumber,
-                  body: isoBody.wrap(
-                    `Review follow-up failed after ${String(isoCount.unwrap(event.maxRetries))} transient retries.
-
-**Reason:** ${isoMessage.unwrap(event.reason)}`
-                  )
-                })
-              }))
+              assign(
+                ({ context, event }) => appendCommentEffect(context, buildReviewTransientExhaustedBody(event))
+              )
             ]
           }
         ],
@@ -49435,34 +49466,18 @@ Transient agent API error during review follow-up (attempt ${String(isoCount.unw
           target: "needs_human",
           actions: [
             { type: "emitStatusFieldSet", params: { from: "review_pending", to: "needs_human" } },
-            assign(({ context, event }) => ({
-              effects: appendEffect(context.effects, {
-                type: "ADD_COMMENT",
-                issueNumber: context.issueNumber,
-                body: isoBody.wrap(
-                  `Review follow-up failed.
-
-**Reason:** ${isoMessage.unwrap(event.reason)}`
-                )
-              })
-            }))
+            assign(
+              ({ context, event }) => appendCommentEffect(context, buildReviewFailedBody(event))
+            )
           ]
         },
         NEEDS_HUMAN_DETECTED: {
           target: "needs_human",
           actions: [
             { type: "emitStatusFieldSet", params: { from: "review_pending", to: "needs_human" } },
-            assign(({ context, event }) => ({
-              effects: appendEffect(context.effects, {
-                type: "ADD_COMMENT",
-                issueNumber: context.issueNumber,
-                body: isoBody.wrap(
-                  `Review follow-up requested human intervention.
-
-**Reason:** ${isoMessage.unwrap(event.reason)}`
-                )
-              })
-            }))
+            assign(
+              ({ context, event }) => appendCommentEffect(context, buildReviewNeedsHumanBody(event))
+            )
           ]
         }
       }
@@ -49520,13 +49535,13 @@ function transitionIssue(issue2, event) {
 }
 
 // src/planner/materialize.ts
-var import_function23 = __toESM(require_function(), 1);
+var import_function24 = __toESM(require_function(), 1);
 var O6 = __toESM(require_Option(), 1);
 var RA8 = __toESM(require_ReadonlyArray(), 1);
 var TE3 = __toESM(require_TaskEither(), 1);
 
 // src/planner/topoSort.ts
-var import_function21 = __toESM(require_function(), 1);
+var import_function22 = __toESM(require_function(), 1);
 var O4 = __toESM(require_Option(), 1);
 var RA6 = __toESM(require_ReadonlyArray(), 1);
 var insertUniqueEdge = (insertion, existing) => {
@@ -49543,14 +49558,12 @@ var insertUniqueEdge = (insertion, existing) => {
     )
   };
 };
+var hasEdgeTarget = (existing, target) => existing.includes(target);
+var isDuplicateTarget = (existing, edge) => hasEdgeTarget(existing, isoPlanNodeId.unwrap(edge.target));
 var appendUniqueEdge = (insertion) => {
   const { graph, edge } = insertion;
   const existing = graph.adj.get(isoPlanNodeId.unwrap(edge.source)) ?? [];
-  return (0, import_function21.pipe)(
-    edge.target,
-    isoPlanNodeId.unwrap,
-    (target) => M(existing.includes(target)).with(true, () => graph).with(false, () => insertUniqueEdge(insertion, existing)).exhaustive()
-  );
+  return M(isDuplicateTarget(existing, edge)).with(true, () => graph).with(false, () => insertUniqueEdge(insertion, existing)).exhaustive();
 };
 var addEdge = (insertion) => {
   const { graph, edge } = insertion;
@@ -49560,63 +49573,39 @@ var addEdge = (insertion) => {
     !graph.byId.has(source) || !graph.byId.has(target) || source === target
   ).with(true, () => graph).with(false, () => appendUniqueEdge(insertion)).exhaustive();
 };
-var addBlockedByEdges = (graph, issue2) => (0, import_function21.pipe)(
-  issue2.blockedBy,
-  RA6.reduce(
-    graph,
-    (acc, dep) => addEdge({
-      graph: acc,
-      edge: { source: isoPlanNodeId.wrap(dep), target: isoPlanNodeId.wrap(issue2.id) }
-    })
-  )
-);
-var addIssueEdges = (graph, issue2) => (0, import_function21.pipe)(
-  issue2.parentId ? addEdge({
-    graph,
-    edge: {
-      source: isoPlanNodeId.wrap(issue2.parentId),
-      target: isoPlanNodeId.wrap(issue2.id)
-    }
-  }) : graph,
-  (g) => addBlockedByEdges(g, issue2)
-);
-var buildByIdMap = (issues) => new Map(
-  (0, import_function21.pipe)(
-    issues,
-    RA6.map((i2) => [i2.id, i2])
-  )
-);
-var buildInDegreeMap = (issues) => new Map(
-  (0, import_function21.pipe)(
-    issues,
-    RA6.map((i2) => [i2.id, 0])
-  )
-);
-var buildAdjMap = (issues) => new Map(
-  (0, import_function21.pipe)(
-    issues,
-    RA6.map((i2) => [i2.id, []])
-  )
-);
-var applyAllIssueEdges = (issues) => (initial) => (0, import_function21.pipe)(issues, RA6.reduce(initial, addIssueEdges));
-var buildGraph = (manifest) => (0, import_function21.pipe)(
-  {
-    byId: buildByIdMap(manifest.issues),
-    inDegree: buildInDegreeMap(manifest.issues),
-    adj: buildAdjMap(manifest.issues)
-  },
-  applyAllIssueEdges(manifest.issues)
-);
-var decrementNeighbors = (neighbors, inDegree) => (0, import_function21.pipe)(
-  neighbors,
-  RA6.reduce({ inDegree, newlyReady: [] }, (acc, next) => {
-    const nextDeg = (acc.inDegree.get(next) ?? 1) - 1;
-    return {
-      inDegree: new Map(acc.inDegree).set(next, nextDeg),
-      newlyReady: nextDeg === 0 ? [...acc.newlyReady, next] : acc.newlyReady
-    };
+var addBlockedByEdges = (update2) => RA6.reduce(
+  update2.graph,
+  (acc, dep) => addEdge({
+    graph: acc,
+    edge: { source: isoPlanNodeId.wrap(dep), target: isoPlanNodeId.wrap(update2.issue.id) }
   })
-);
+)(update2.issue.blockedBy);
+var addParentEdge = (update2) => update2.issue.parentId ? addEdge({
+  graph: update2.graph,
+  edge: {
+    source: isoPlanNodeId.wrap(update2.issue.parentId),
+    target: isoPlanNodeId.wrap(update2.issue.id)
+  }
+}) : update2.graph;
+var addIssueEdges = (graph, issue2) => addBlockedByEdges({ graph: addParentEdge({ graph, issue: issue2 }), issue: issue2 });
+var buildByIdMap = (issues) => new Map(RA6.map((i2) => [i2.id, i2])(issues));
+var buildInDegreeMap = (issues) => new Map(RA6.map((i2) => [i2.id, 0])(issues));
+var buildAdjMap = (issues) => new Map(RA6.map((i2) => [i2.id, []])(issues));
+var applyAllIssueEdges = (issues) => (initial) => RA6.reduce(initial, addIssueEdges)(issues);
+var buildGraph = (manifest) => applyAllIssueEdges(manifest.issues)({
+  byId: buildByIdMap(manifest.issues),
+  inDegree: buildInDegreeMap(manifest.issues),
+  adj: buildAdjMap(manifest.issues)
+});
+var decrementNeighbor = (acc, next) => {
+  const nextDeg = (acc.inDegree.get(next) ?? 1) - 1;
+  return {
+    inDegree: new Map(acc.inDegree).set(next, nextDeg),
+    newlyReady: nextDeg === 0 ? [...acc.newlyReady, next] : acc.newlyReady
+  };
+};
+var decrementNeighbors = (neighbors, inDegree) => RA6.reduce({ inDegree, newlyReady: [] }, decrementNeighbor)(neighbors);
+var tailQueue = (queue) => queue.slice(1);
 var stepWithNode = (current, queue, inDegree, graph, acc) => {
   const node2 = graph.byId.get(current);
   const { inDegree: nextInDegree, newlyReady } = decrementNeighbors(
@@ -49624,110 +49613,102 @@ var stepWithNode = (current, queue, inDegree, graph, acc) => {
     inDegree
   );
   return kahnStep(
-    [...queue.slice(1), ...newlyReady],
+    [...tailQueue(queue), ...newlyReady],
     nextInDegree,
     graph,
     node2 ? [...acc, node2] : acc
   );
 };
-var kahnStep = (queue, inDegree, graph, acc) => (0, import_function21.pipe)(
-  RA6.head(queue),
-  O4.match(
-    () => acc,
-    (current) => stepWithNode(current, queue, inDegree, graph, acc)
-  )
-);
-var readyNodeIds = (inDegree) => (0, import_function21.pipe)(
-  Array.from(inDegree.entries()),
+var kahnStep = (queue, inDegree, graph, acc) => O4.match(
+  () => acc,
+  (current) => stepWithNode(current, queue, inDegree, graph, acc)
+)(RA6.head(queue));
+function mapEntries(map19) {
+  return Array.from(map19.entries());
+}
+var readyNodeIds = (0, import_function22.flow)(
+  mapEntries,
   RA6.filterMap(([id6, deg]) => deg === 0 ? O4.some(id6) : O4.none)
 );
-var runKahn = (graph) => (0, import_function21.pipe)(
-  readyNodeIds(graph.inDegree),
-  (ready) => kahnStep(ready, graph.inDegree, graph, [])
-);
-var topoSortPlan = (0, import_function21.flow)(buildGraph, runKahn);
+function runKahn(graph) {
+  return kahnStep(readyNodeIds(graph.inDegree), graph.inDegree, graph, []);
+}
+var topoSortPlan = (0, import_function22.flow)(buildGraph, runKahn);
 
 // src/planner/validateDag.ts
 var E5 = __toESM(require_Either(), 1);
-var import_function22 = __toESM(require_function(), 1);
+var import_function23 = __toESM(require_function(), 1);
 var O5 = __toESM(require_Option(), 1);
 var RA7 = __toESM(require_ReadonlyArray(), 1);
 var initDupAcc = (epicId) => ({
-  allIds: (0, import_function22.pipe)(
-    epicId,
-    O5.match(
-      () => /* @__PURE__ */ new Set(),
-      (id6) => /* @__PURE__ */ new Set([id6])
-    )
-  ),
+  allIds: O5.match(
+    () => /* @__PURE__ */ new Set(),
+    (id6) => /* @__PURE__ */ new Set([id6])
+  )(epicId),
   errors: []
 });
-var collectDuplicateErrors = (issues, epicId) => (0, import_function22.pipe)(
-  issues,
-  RA7.reduce(initDupAcc(epicId), (acc, issue2) => ({
-    allIds: /* @__PURE__ */ new Set([...acc.allIds, issue2.id]),
-    errors: acc.allIds.has(issue2.id) ? [...acc.errors, `Duplicate issue id '${issue2.id}'`] : acc.errors
-  }))
-);
-var collectBlockedByRefErrors = (issue2, allIds) => (0, import_function22.pipe)(
-  issue2.blockedBy,
-  RA7.flatMap((dep) => [
-    ...!allIds.has(dep) ? [`Issue '${issue2.id}' references unknown blockedBy id '${dep}'`] : [],
-    ...dep === issue2.id ? [`Issue '${issue2.id}' cannot be blocked by itself`] : []
-  ])
-);
+var formatDupError = (issueId) => `Duplicate issue id '${issueId}'`;
+var appendDupAcc = (acc, issue2) => ({
+  allIds: /* @__PURE__ */ new Set([...acc.allIds, issue2.id]),
+  errors: acc.allIds.has(issue2.id) ? [...acc.errors, formatDupError(issue2.id)] : acc.errors
+});
+var collectDuplicateErrors = (issues, epicId) => RA7.reduce(initDupAcc(epicId), appendDupAcc)(issues);
+var formatUnknownBlockedBy = (issueId, dep) => `Issue '${issueId}' references unknown blockedBy id '${dep}'`;
+var formatSelfBlockedBy = (issueId) => `Issue '${issueId}' cannot be blocked by itself`;
+var collectBlockedByRefErrors = (issue2, allIds) => RA7.flatMap((dep) => [
+  ...!allIds.has(dep) ? [formatUnknownBlockedBy(issue2.id, dep)] : [],
+  ...dep === issue2.id ? [formatSelfBlockedBy(issue2.id)] : []
+])(issue2.blockedBy);
+var formatUnknownParent = (issueId, parentId) => `Issue '${issueId}' references unknown parentId '${parentId}'`;
+var formatSelfParent = (issueId) => `Issue '${issueId}' cannot be its own parent`;
 var collectRefErrorsForIssue = (issue2, allIds) => [
-  ...issue2.parentId && !allIds.has(issue2.parentId) ? [`Issue '${issue2.id}' references unknown parentId '${issue2.parentId}'`] : [],
-  ...issue2.parentId === issue2.id ? [`Issue '${issue2.id}' cannot be its own parent`] : [],
+  ...issue2.parentId && !allIds.has(issue2.parentId) ? [formatUnknownParent(issue2.id, issue2.parentId)] : [],
+  ...issue2.parentId === issue2.id ? [formatSelfParent(issue2.id)] : [],
   ...collectBlockedByRefErrors(issue2, allIds)
 ];
 var addEdgeToAdj = (adj, edge) => {
   const source = isoPlanNodeId.unwrap(edge.source);
   return new Map(adj).set(source, [...adj.get(source) ?? [], isoPlanNodeId.unwrap(edge.target)]);
 };
-var addBlockedByToAdj = (adj, issue2) => (0, import_function22.pipe)(
-  issue2.blockedBy,
-  RA7.reduce(
-    adj,
-    (m, dep) => addEdgeToAdj(m, { source: isoPlanNodeId.wrap(dep), target: isoPlanNodeId.wrap(issue2.id) })
-  )
-);
-var addDepsToAdj = (adj, issue2) => (0, import_function22.pipe)(
-  issue2.parentId ? addEdgeToAdj(adj, {
-    source: isoPlanNodeId.wrap(issue2.parentId),
-    target: isoPlanNodeId.wrap(issue2.id)
-  }) : adj,
-  (withParent) => addBlockedByToAdj(withParent, issue2)
-);
-var initialAdjEntries = (allIds) => (0, import_function22.pipe)(
-  Array.from(allIds),
+var addBlockedByToAdj = (update2) => RA7.reduce(
+  update2.adj,
+  (m, dep) => addEdgeToAdj(m, {
+    source: isoPlanNodeId.wrap(dep),
+    target: isoPlanNodeId.wrap(update2.issue.id)
+  })
+)(update2.issue.blockedBy);
+var addParentToAdj = (update2) => update2.issue.parentId ? addEdgeToAdj(update2.adj, {
+  source: isoPlanNodeId.wrap(update2.issue.parentId),
+  target: isoPlanNodeId.wrap(update2.issue.id)
+}) : update2.adj;
+var addDepsToAdj = (adj, issue2) => addBlockedByToAdj({ adj: addParentToAdj({ adj, issue: issue2 }), issue: issue2 });
+var setToArray = (ids) => Array.from(ids);
+var initialAdjEntries = (0, import_function23.flow)(
+  setToArray,
   RA7.map((id6) => [id6, []])
 );
-var buildAdjacency = (allIds, issues) => (0, import_function22.pipe)(
-  issues,
-  RA7.reduce(new Map(initialAdjEntries(allIds)), addDepsToAdj)
+var buildAdjacency = (allIds, issues) => RA7.reduce(new Map(initialAdjEntries(allIds)), addDepsToAdj)(
+  issues
 );
-var stepNeighbor = (next, acc, state) => (0, import_function22.pipe)(
-  acc.cycle,
-  O5.match(
-    () => dfsNode(next, { ...state, visited: acc.visited }),
-    () => acc
-  )
-);
-var dfsNeighbors = (neighbors, state) => (0, import_function22.pipe)(
-  neighbors,
-  RA7.reduce(
-    { visited: state.visited, cycle: O5.none },
-    (acc, next) => stepNeighbor(next, acc, state)
-  )
-);
-var exploreNode = (nodeId, state) => (0, import_function22.pipe)(
+var stepNeighbor = (next, acc, state) => O5.match(
+  () => dfsNode(next, { ...state, visited: acc.visited }),
+  () => acc
+)(acc.cycle);
+var dfsNeighbors = (neighbors, state) => RA7.reduce(
+  { visited: state.visited, cycle: O5.none },
+  (acc, next) => stepNeighbor(next, acc, state)
+)(neighbors);
+var finalizeExplore = (nodeId, res) => ({
+  visited: /* @__PURE__ */ new Set([...res.visited, nodeId]),
+  cycle: res.cycle
+});
+var exploreNode = (nodeId, state) => finalizeExplore(
+  nodeId,
   dfsNeighbors(state.adj.get(nodeId) ?? [], {
     ...state,
     path: [...state.path, nodeId],
     visiting: /* @__PURE__ */ new Set([...state.visiting, nodeId])
-  }),
-  (res) => ({ visited: /* @__PURE__ */ new Set([...res.visited, nodeId]), cycle: res.cycle })
+  })
 );
 var dfsNode = (nodeId, state) => M({
   isVisiting: state.visiting.has(nodeId),
@@ -49739,46 +49720,47 @@ var dfsNode = (nodeId, state) => M({
   visited: state.visited,
   cycle: O5.none
 })).otherwise(() => exploreNode(nodeId, state));
-var findCycle = (allIds, adj) => (0, import_function22.pipe)(
-  Array.from(allIds),
-  RA7.reduce(
-    { visited: /* @__PURE__ */ new Set(), cycle: O5.none },
-    (acc, id6) => O5.isSome(acc.cycle) || acc.visited.has(id6) ? acc : dfsNode(id6, { path: [], visiting: /* @__PURE__ */ new Set(), visited: acc.visited, adj })
-  ),
-  (res) => res.cycle
-);
-var checkCycles = (manifest, allIds) => (0, import_function22.pipe)(
-  findCycle(allIds, buildAdjacency(allIds, manifest.issues)),
+var findCycle = (allIds, adj) => RA7.reduce(
+  { visited: /* @__PURE__ */ new Set(), cycle: O5.none },
+  (acc, id6) => O5.isSome(acc.cycle) || acc.visited.has(id6) ? acc : dfsNode(id6, { path: [], visiting: /* @__PURE__ */ new Set(), visited: acc.visited, adj })
+)(setToArray(allIds)).cycle;
+var formatCyclePath = (cycle) => cycle.join(" -> ");
+var formatCycleMessage = (cyclePath) => `Dependency cycle detected: ${cyclePath}`;
+var toCycleError = (cycle) => {
+  const cyclePath = formatCyclePath(cycle);
+  return {
+    type: "PLAN_VALIDATION_ERROR",
+    message: isoMessage.wrap(formatCycleMessage(cyclePath)),
+    details: [isoMessage.wrap(cyclePath)]
+  };
+};
+var checkCycles = (manifest, allIds) => (0, import_function23.flow)(
+  (issues) => buildAdjacency(allIds, issues),
+  (adj) => findCycle(allIds, adj),
   O5.match(
     () => E5.right(manifest),
-    (cycle) => E5.left({
-      type: "PLAN_VALIDATION_ERROR",
-      message: isoMessage.wrap(`Dependency cycle detected: ${cycle.join(" -> ")}`),
-      details: [isoMessage.wrap(cycle.join(" -> "))]
-    })
+    (0, import_function23.flow)(toCycleError, E5.left)
   )
-);
-var collectAllRefErrors = (issues, allIds) => (0, import_function22.pipe)(
-  issues,
-  RA7.flatMap((issue2) => collectRefErrorsForIssue(issue2, allIds))
-);
-var wrapMessages = (msgs) => (0, import_function22.pipe)(msgs, RA7.map(isoMessage.wrap));
-var validateReferences = (manifest, allIds, dupErrors) => (0, import_function22.pipe)(
-  [...dupErrors, ...collectAllRefErrors(manifest.issues, allIds)],
-  (allErrors) => M(allErrors.length > 0).with(
+)(manifest.issues);
+var collectAllRefErrors = (issues, allIds) => RA7.flatMap((issue2) => collectRefErrorsForIssue(issue2, allIds))(issues);
+var wrapMessages = RA7.map(isoMessage.wrap);
+var validateReferences = (manifest, allIds, dupErrors) => {
+  const allErrors = [...dupErrors, ...collectAllRefErrors(manifest.issues, allIds)];
+  return M(allErrors.length > 0).with(
     true,
     () => E5.left({
       type: "PLAN_VALIDATION_ERROR",
       message: isoMessage.wrap("Plan manifest reference validation failed"),
       details: wrapMessages(allErrors)
     })
-  ).with(false, () => checkCycles(manifest, allIds)).exhaustive()
-);
+  ).with(false, () => checkCycles(manifest, allIds)).exhaustive();
+};
 function validatePlanDag(manifest) {
-  return (0, import_function22.pipe)(
-    collectDuplicateErrors(manifest.issues, O5.fromNullable(manifest.epic?.id)),
-    ({ allIds, errors }) => validateReferences(manifest, allIds, errors)
+  const { allIds, errors } = collectDuplicateErrors(
+    manifest.issues,
+    O5.fromNullable(manifest.epic?.id)
   );
+  return validateReferences(manifest, allIds, errors);
 }
 
 // src/planner/materialize.ts
@@ -49797,66 +49779,52 @@ function formatIssueBody(body) {
 ${ISSUE_DEVELOPMENT_STANDARDS}` : ISSUE_DEVELOPMENT_STANDARDS
   ).exhaustive();
 }
-var assignCreatedStatus = (github, issueNumber, epicId) => (0, import_function23.pipe)(
-  github.updateIssueStatus(issueNumber, "backlog"),
-  TE3.map(() => /* @__PURE__ */ new Map([[epicId, issueNumber]]))
+var assignCreatedStatus = (github, issueNumber, epicId) => TE3.map(() => /* @__PURE__ */ new Map([[epicId, issueNumber]]))(
+  github.updateIssueStatus(issueNumber, "backlog")
 );
-var createEpicNode = (epic, github) => (0, import_function23.pipe)(
-  github.createIssue({
-    title: epic.title,
-    body: formatIssueBody(epic.body),
-    labels: [isoLabelName.unwrap(TYPE_TO_LABEL.epic), isoLabelName.unwrap(AI_MANAGED_LABEL)]
-  }),
+var createEpicNode = (epic, github) => (0, import_function24.flow)(
+  (input2) => github.createIssue(input2),
   TE3.flatMap((created) => assignCreatedStatus(github, created.number, epic.id))
-);
-var createEpicIfPresent = (epic, github) => (0, import_function23.pipe)(
-  O6.fromNullable(epic),
+)({
+  title: epic.title,
+  body: formatIssueBody(epic.body),
+  labels: [isoLabelName.unwrap(TYPE_TO_LABEL.epic), isoLabelName.unwrap(AI_MANAGED_LABEL)]
+});
+var createEpicIfPresent = (epic, github) => (0, import_function24.flow)(
+  O6.fromNullable,
   O6.match(
     () => TE3.right(/* @__PURE__ */ new Map()),
     (e2) => createEpicNode(e2, github)
   )
-);
-var nodeLabels = (node2) => Array.from(
-  /* @__PURE__ */ new Set([
-    isoLabelName.unwrap(TYPE_TO_LABEL[node2.type]),
-    isoLabelName.unwrap(AI_MANAGED_LABEL),
-    ...node2.labels
-  ])
-);
-var collectParentIds = (nodes) => new Set(
-  (0, import_function23.pipe)(
-    nodes,
-    RA8.filterMap((n2) => O6.fromNullable(n2.parentId))
-  )
-);
+)(epic);
+var toUniqueArray = (items) => Array.from(new Set(items));
+var nodeLabels = (node2) => toUniqueArray([
+  isoLabelName.unwrap(TYPE_TO_LABEL[node2.type]),
+  isoLabelName.unwrap(AI_MANAGED_LABEL),
+  ...node2.labels
+]);
+var collectParentIds = (nodes) => new Set(RA8.filterMap((n2) => O6.fromNullable(n2.parentId))(nodes));
 var initialStatusForNode = (node2, parentIds) => M(node2.type === "epic" || parentIds.has(node2.id)).with(true, () => "backlog").with(false, () => node2.blockedBy.length > 0 ? "blocked_dep" : "ready").exhaustive();
-var assignNodeStatus = (ctx, node2, createdNumber, parentIds) => (0, import_function23.pipe)(
-  ctx.github.updateIssueStatus(createdNumber, initialStatusForNode(node2, parentIds)),
+var assignNodeStatus = (ctx, node2, createdNumber, parentIds) => (0, import_function24.flow)(
+  (status) => ctx.github.updateIssueStatus(createdNumber, status),
   TE3.map(() => new Map(ctx.idToNumber).set(node2.id, createdNumber))
-);
-var createSingleNode = (node2, ctx, parentIds) => (0, import_function23.pipe)(
-  ctx.github.createIssue({
-    title: node2.title,
-    body: formatIssueBody(node2.body),
-    labels: nodeLabels(node2)
-  }),
+)(initialStatusForNode(node2, parentIds));
+var createSingleNode = (node2, ctx, parentIds) => (0, import_function24.flow)(
+  (input2) => ctx.github.createIssue(input2),
   TE3.flatMap((created) => assignNodeStatus(ctx, node2, created.number, parentIds))
-);
-var appendCreatedNode = (github, parentIds) => (acc, node2) => (0, import_function23.pipe)(
-  acc,
-  TE3.flatMap((idToNumber) => createSingleNode(node2, { github, idToNumber }, parentIds))
-);
-var createNodesWithParentIds = (sorted, initialMap, github, parentIds) => (0, import_function23.pipe)(
-  sorted,
-  RA8.reduce(
-    TE3.right(initialMap),
-    appendCreatedNode(github, parentIds)
-  )
-);
-var createAllNodes = (sorted, initialMap, github) => (0, import_function23.pipe)(
-  collectParentIds(sorted),
-  (parentIds) => createNodesWithParentIds(sorted, initialMap, github, parentIds)
-);
+)({
+  title: node2.title,
+  body: formatIssueBody(node2.body),
+  labels: nodeLabels(node2)
+});
+var appendCreatedNode = (github, parentIds) => (acc, node2) => TE3.flatMap(
+  (idToNumber) => createSingleNode(node2, { github, idToNumber }, parentIds)
+)(acc);
+var createNodesWithParentIds = (sorted, initialMap, github, parentIds) => RA8.reduce(
+  TE3.right(initialMap),
+  appendCreatedNode(github, parentIds)
+)(sorted);
+var createAllNodes = (sorted, initialMap, github) => createNodesWithParentIds(sorted, initialMap, github, collectParentIds(sorted));
 var emptyParentLinkResult = () => ({
   subLinks: [],
   tasks: []
@@ -49867,42 +49835,33 @@ var buildParentLinkResult = (parentNum, childNum, github) => ({
   ],
   tasks: [github.addSubIssue(parentNum, childNum)]
 });
-var collectParentLink = (childNum, parentId, ctx) => (0, import_function23.pipe)(
-  parentId,
-  O6.flatMap((0, import_function23.flow)((id6) => ctx.idToNumber.get(id6), O6.fromNullable)),
+var collectParentLink = (childNum, parentId, ctx) => (0, import_function24.flow)(
+  O6.flatMap((0, import_function24.flow)((id6) => ctx.idToNumber.get(id6), O6.fromNullable)),
   O6.match(
     emptyParentLinkResult,
     (parentNum) => buildParentLinkResult(parentNum, childNum, ctx.github)
   )
-);
+)(parentId);
 var toDepPair = (childNum, blockerNum, github) => ({
   link: { issue: isoIssueNumber.wrap(childNum), blockedBy: isoIssueNumber.wrap(blockerNum) },
   task: github.addBlockedBy(childNum, blockerNum)
 });
-var resolveDepPair = (childNum, depId, ctx) => (0, import_function23.pipe)(
-  O6.fromNullable(ctx.idToNumber.get(depId)),
+var resolveDepPair = (childNum, depId, ctx) => (0, import_function24.flow)(
+  (id6) => ctx.idToNumber.get(id6),
+  O6.fromNullable,
   O6.map((b2) => toDepPair(childNum, b2, ctx.github))
-);
-var extractDepLinks = (pairs) => (0, import_function23.pipe)(
-  pairs,
-  RA8.map((p2) => p2.link)
-);
-var extractDepTasks = (pairs) => (0, import_function23.pipe)(
-  pairs,
-  RA8.map((p2) => p2.task)
-);
-var collectDepLinks = (childNum, blockedBy, ctx) => (0, import_function23.pipe)(
-  blockedBy,
+)(depId);
+var extractDepLinks = RA8.map((p2) => p2.link);
+var extractDepTasks = RA8.map((p2) => p2.task);
+var toCollectedDeps = (pairs) => ({
+  depLinks: extractDepLinks(pairs),
+  tasks: extractDepTasks(pairs)
+});
+var collectDepLinks = (childNum, blockedBy, ctx) => (0, import_function24.flow)(
   RA8.filterMap((depId) => resolveDepPair(childNum, depId, ctx)),
-  (pairs) => ({
-    depLinks: extractDepLinks(pairs),
-    tasks: extractDepTasks(pairs)
-  })
-);
-var resolveParentId = (node2, epic) => (0, import_function23.pipe)(
-  O6.fromNullable(node2.parentId),
-  O6.alt(() => O6.fromNullable(epic?.id))
-);
+  toCollectedDeps
+)(blockedBy);
+var resolveParentId = (node2, epic) => O6.alt(() => O6.fromNullable(epic?.id))(O6.fromNullable(node2.parentId));
 var buildNodeLinks = (childNum, node2, epic, ctx) => {
   const parent = collectParentLink(childNum, resolveParentId(node2, epic), ctx);
   const deps = collectDepLinks(childNum, node2.blockedBy, ctx);
@@ -49912,8 +49871,9 @@ var buildNodeLinks = (childNum, node2, epic, ctx) => {
     tasks: [...parent.tasks, ...deps.tasks]
   };
 };
-var collectLinksForNode = (node2, epic, ctx) => (0, import_function23.pipe)(
-  O6.fromNullable(ctx.idToNumber.get(node2.id)),
+var collectLinksForNode = (node2, epic, ctx) => (0, import_function24.flow)(
+  (id6) => ctx.idToNumber.get(id6),
+  O6.fromNullable,
   O6.match(
     () => ({
       subLinks: [],
@@ -49922,52 +49882,46 @@ var collectLinksForNode = (node2, epic, ctx) => (0, import_function23.pipe)(
     }),
     (childNum) => buildNodeLinks(childNum, node2, epic, ctx)
   )
-);
-var chainTask = (acc, task) => (0, import_function23.pipe)(
-  acc,
-  TE3.flatMap(() => task)
-);
-var runSequentialTasks = (tasks) => (0, import_function23.pipe)(tasks, RA8.reduce(TE3.right(void 0), chainTask));
-var flattenTasks = (collected) => (0, import_function23.pipe)(
-  collected,
-  RA8.flatMap((c2) => c2.tasks)
-);
-var flattenSubLinks = (collected) => (0, import_function23.pipe)(
-  collected,
-  RA8.flatMap((c2) => c2.subLinks)
-);
-var flattenDepLinks = (collected) => (0, import_function23.pipe)(
-  collected,
-  RA8.flatMap((c2) => c2.depLinks)
-);
-var executeCollectedLinks = (collected, idToNumber) => (0, import_function23.pipe)(
-  runSequentialTasks(flattenTasks(collected)),
-  TE3.map(() => ({
-    createdIssues: Object.fromEntries(idToNumber.entries()),
-    subIssueLinks: flattenSubLinks(collected),
-    dependencyLinks: flattenDepLinks(collected)
-  }))
-);
-var linkAllNodes = (sorted, epic, ctx) => (0, import_function23.pipe)(
-  sorted,
+)(node2.id);
+var chainTask = (acc, task) => TE3.flatMap(() => task)(acc);
+var emptyTask = TE3.right(void 0);
+var runSequentialTasks = RA8.reduce(emptyTask, chainTask);
+var flattenTasks = RA8.flatMap((c2) => c2.tasks);
+var flattenSubLinks = RA8.flatMap((c2) => c2.subLinks);
+var flattenDepLinks = RA8.flatMap((c2) => c2.depLinks);
+function mapToRecord(map19) {
+  return Object.fromEntries(map19.entries());
+}
+var toMaterializedResult = (collected, idToNumber) => ({
+  createdIssues: mapToRecord(idToNumber),
+  subIssueLinks: flattenSubLinks(collected),
+  dependencyLinks: flattenDepLinks(collected)
+});
+var executeCollectedLinks = (collected, idToNumber) => (0, import_function24.flow)(
+  flattenTasks,
+  runSequentialTasks,
+  TE3.map(() => toMaterializedResult(collected, idToNumber))
+)(collected);
+var linkAllNodes = (sorted, epic, ctx) => (0, import_function24.flow)(
   RA8.map((node2) => collectLinksForNode(node2, epic, ctx)),
   (collected) => executeCollectedLinks(collected, ctx.idToNumber)
-);
+)(sorted);
 var materializeValidPlan = (validManifest, github) => {
   const sorted = topoSortPlan(validManifest);
-  return (0, import_function23.pipe)(
-    createEpicIfPresent(validManifest.epic, github),
+  return (0, import_function24.flow)(
+    (epic) => createEpicIfPresent(epic, github),
     TE3.flatMap((epicMap) => createAllNodes(sorted, epicMap, github)),
     TE3.flatMap(
       (idToNumber) => linkAllNodes(sorted, validManifest.epic, { github, idToNumber })
     )
-  );
+  )(validManifest.epic);
 };
 function materializePlan(manifest, github) {
-  return (0, import_function23.pipe)(
-    TE3.fromEither(validatePlanDag(manifest)),
+  return (0, import_function24.flow)(
+    validatePlanDag,
+    TE3.fromEither,
     TE3.flatMap((validManifest) => materializeValidPlan(validManifest, github))
-  );
+  )(manifest);
 }
 
 // src/cli/init.ts
@@ -50318,23 +50272,20 @@ ${reviewTriggerInstruction}
 var E6 = __toESM(require_Either(), 1);
 
 // src/rollup/computeRollup.ts
-var import_function24 = __toESM(require_function(), 1);
+var import_function25 = __toESM(require_function(), 1);
 var RA9 = __toESM(require_ReadonlyArray(), 1);
 var computeNonEmptyStatus = (statuses) => M(statuses).when(RA9.some((s2) => s2 === "needs_human"), () => "needs_human").when(RA9.every((s2) => s2 === "fixed"), () => "fixed").when(
   RA9.some((s2) => s2 === "in_progress" || s2 === "review_pending" || s2 === "fixed"),
   () => "in_progress"
 ).when(RA9.some((s2) => s2 === "ready"), () => "ready").when(RA9.some((s2) => s2 === "blocked_dep"), () => "blocked_dep").otherwise(() => "backlog");
+var computeStatusFromChildren = (0, import_function25.flow)(
+  RA9.map((c2) => c2.status),
+  computeNonEmptyStatus
+);
 function computeContainerStatus(children) {
-  return M(children.length === 0).with(true, () => "backlog").with(
-    false,
-    () => (0, import_function24.pipe)(
-      children,
-      RA9.map((c2) => c2.status),
-      computeNonEmptyStatus
-    )
-  ).exhaustive();
+  return M(children.length === 0).with(true, () => "backlog").with(false, () => computeStatusFromChildren(children)).exhaustive();
 }
-var buildStatusEffects = (parent, targetStatus) => M(targetStatus !== parent.status).with(
+var buildStatusEffects = ({ parent, targetStatus }) => M(targetStatus !== parent.status).with(
   true,
   () => [
     {
@@ -50344,7 +50295,7 @@ var buildStatusEffects = (parent, targetStatus) => M(targetStatus !== parent.sta
     }
   ]
 ).with(false, () => []).exhaustive();
-var buildLifecycleEffects = (parent, targetStatus) => M([targetStatus, parent.state]).with(
+var buildLifecycleEffects = ({ parent, targetStatus }) => M([targetStatus, parent.state]).with(
   ["fixed", "open"],
   () => [{ type: "CLOSE_ISSUE", issueNumber: parent.number }]
 ).with(
@@ -50356,14 +50307,15 @@ var buildLifecycleEffects = (parent, targetStatus) => M([targetStatus, parent.st
   ["needs_human", "closed"],
   () => [{ type: "REOPEN_ISSUE", issueNumber: parent.number }]
 ).otherwise(() => []);
+var toRollupResult = (target) => ({
+  targetStatus: target.targetStatus,
+  effects: [
+    ...buildStatusEffects(target),
+    ...buildLifecycleEffects(target)
+  ]
+});
 function computeRollupEffects(parent, children) {
-  return (0, import_function24.pipe)(computeContainerStatus(children), (targetStatus) => ({
-    targetStatus,
-    effects: [
-      ...buildStatusEffects(parent, targetStatus),
-      ...buildLifecycleEffects(parent, targetStatus)
-    ]
-  }));
+  return toRollupResult({ parent, targetStatus: computeContainerStatus(children) });
 }
 
 // src/cli/reconcileHelpers.ts
@@ -50738,7 +50690,7 @@ var planCmd = program2.command("plan").description("Validate and materialize pla
 planCmd.command("validate").description("Validate a plan-manifest.yml schema and dependency DAG").requiredOption("--file <path>", "Path to plan-manifest.yml").action((rawOpts) => {
   const opts = external_exports.object({ file: external_exports.string() }).parse(rawOpts);
   const content = readTextFileOrFail(opts.file, "plan manifest");
-  const res = (0, import_function25.pipe)(parsePlanManifest(content), E8.flatMap(validatePlanDag));
+  const res = (0, import_function26.pipe)(parsePlanManifest(content), E8.flatMap(validatePlanDag));
   if (E8.isLeft(res)) return fail(res.left);
   const manifest = res.right;
   console.log(`Plan manifest valid (${String(manifest.issues.length)} issues).`);
@@ -50751,7 +50703,7 @@ planCmd.command("materialize").description("Create GitHub issues, sub-issue link
     repo: external_exports.string().optional()
   }).parse(rawOpts);
   const content = readTextFileOrFail(opts.file, "plan manifest");
-  const parsed = (0, import_function25.pipe)(parsePlanManifest(content), E8.flatMap(validatePlanDag));
+  const parsed = (0, import_function26.pipe)(parsePlanManifest(content), E8.flatMap(validatePlanDag));
   if (E8.isLeft(parsed)) return fail(parsed.left);
   const config2 = loadOptionalConfigFromDisk(opts.config);
   const github = createGitHubFromEnv(opts.repo, opts.fieldName ?? config2?.statusFieldName);
@@ -50768,7 +50720,7 @@ program2.command("claim").description("Run deterministic FSM pickup guards and c
   const config2 = loadConfigFromDisk(opts.config);
   const github = createGitHubFromEnv(opts.repo, config2.statusFieldName);
   const data = await runOrExit(
-    (0, import_function25.pipe)(
+    (0, import_function26.pipe)(
       TE4.Do,
       TE4.apS("issue", github.getIssue(issueNumber)),
       TE4.apS("allOpen", github.listAllIssues("open")),

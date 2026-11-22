@@ -1,5 +1,5 @@
 import * as E from 'fp-ts/lib/Either';
-import { pipe } from 'fp-ts/lib/function';
+import { flow } from 'fp-ts/lib/function';
 import * as O from 'fp-ts/lib/Option';
 import * as RA from 'fp-ts/lib/ReadonlyArray';
 import { match } from 'ts-pattern';
@@ -14,47 +14,54 @@ type DupAcc = {
 
 const initDupAcc = (epicId: O.Option<string>) =>
   ({
-    allIds: pipe(
-      epicId,
-      O.match(
-        () => new Set<string>(),
-        (id) => new Set<string>([id]),
-      ),
-    ),
+    allIds: O.match(
+      () => new Set<string>(),
+      (id: string) => new Set<string>([id]),
+    )(epicId),
     errors: [],
+  }) satisfies DupAcc;
+
+const formatDupError = (issueId: string) => `Duplicate issue id '${issueId}'`;
+
+const appendDupAcc = (acc: DupAcc, issue: PlanIssueNode) =>
+  ({
+    allIds: new Set([...acc.allIds, issue.id]),
+    errors: acc.allIds.has(issue.id)
+      ? [...acc.errors, formatDupError(issue.id)]
+      : acc.errors,
   }) satisfies DupAcc;
 
 const collectDuplicateErrors = (
   issues: ReadonlyArray<PlanIssueNode>,
   epicId: O.Option<string>,
-) =>
-  pipe(
-    issues,
-    RA.reduce(initDupAcc(epicId), (acc: DupAcc, issue) => ({
-      allIds: new Set([...acc.allIds, issue.id]),
-      errors: acc.allIds.has(issue.id)
-        ? [...acc.errors, `Duplicate issue id '${issue.id}'`]
-        : acc.errors,
-    })),
-  );
+) => RA.reduce(initDupAcc(epicId), appendDupAcc)(issues);
+
+const formatUnknownBlockedBy = (issueId: string, dep: string) =>
+  `Issue '${issueId}' references unknown blockedBy id '${dep}'`;
+
+const formatSelfBlockedBy = (issueId: string) =>
+  `Issue '${issueId}' cannot be blocked by itself`;
 
 const collectBlockedByRefErrors = (issue: PlanIssueNode, allIds: ReadonlySet<string>) =>
-  pipe(
-    issue.blockedBy,
-    RA.flatMap((dep) => [
-      ...(!allIds.has(dep) ? [`Issue '${issue.id}' references unknown blockedBy id '${dep}'`] : []),
-      ...(dep === issue.id ? [`Issue '${issue.id}' cannot be blocked by itself`] : []),
-    ]),
-  );
+  RA.flatMap((dep: string) => [
+    ...(!allIds.has(dep) ? [formatUnknownBlockedBy(issue.id, dep)] : []),
+    ...(dep === issue.id ? [formatSelfBlockedBy(issue.id)] : []),
+  ])(issue.blockedBy);
+
+const formatUnknownParent = (issueId: string, parentId: string) =>
+  `Issue '${issueId}' references unknown parentId '${parentId}'`;
+
+const formatSelfParent = (issueId: string) =>
+  `Issue '${issueId}' cannot be its own parent`;
 
 const collectRefErrorsForIssue = (
   issue: PlanIssueNode,
   allIds: ReadonlySet<string>,
 ) => [
   ...(issue.parentId && !allIds.has(issue.parentId)
-    ? [`Issue '${issue.id}' references unknown parentId '${issue.parentId}'`]
+    ? [formatUnknownParent(issue.id, issue.parentId)]
     : []),
-  ...(issue.parentId === issue.id ? [`Issue '${issue.id}' cannot be its own parent`] : []),
+  ...(issue.parentId === issue.id ? [formatSelfParent(issue.id)] : []),
   ...collectBlockedByRefErrors(issue, allIds),
 ];
 
@@ -71,44 +78,45 @@ const addEdgeToAdj = (
   return new Map(adj).set(source, [...(adj.get(source) ?? []), isoPlanNodeId.unwrap(edge.target)]);
 };
 
-const addBlockedByToAdj = (
-  adj: ReadonlyMap<string, ReadonlyArray<string>>,
-  issue: PlanIssueNode,
-) =>
-  pipe(
-    issue.blockedBy,
-    RA.reduce(adj, (m, dep) =>
-      addEdgeToAdj(m, { source: isoPlanNodeId.wrap(dep), target: isoPlanNodeId.wrap(issue.id) }),
-    ),
-  );
+type IssueAdjUpdate = {
+  readonly adj: ReadonlyMap<string, ReadonlyArray<string>>;
+  readonly issue: PlanIssueNode;
+};
+
+const addBlockedByToAdj = (update: IssueAdjUpdate) =>
+  RA.reduce(update.adj, (m: ReadonlyMap<string, ReadonlyArray<string>>, dep: string) =>
+    addEdgeToAdj(m, {
+      source: isoPlanNodeId.wrap(dep),
+      target: isoPlanNodeId.wrap(update.issue.id),
+    }),
+  )(update.issue.blockedBy);
+
+const addParentToAdj = (update: IssueAdjUpdate) =>
+  update.issue.parentId
+    ? addEdgeToAdj(update.adj, {
+        source: isoPlanNodeId.wrap(update.issue.parentId),
+        target: isoPlanNodeId.wrap(update.issue.id),
+      })
+    : update.adj;
 
 const addDepsToAdj = (
   adj: ReadonlyMap<string, ReadonlyArray<string>>,
   issue: PlanIssueNode,
-) =>
-  pipe(
-    issue.parentId
-      ? addEdgeToAdj(adj, {
-          source: isoPlanNodeId.wrap(issue.parentId),
-          target: isoPlanNodeId.wrap(issue.id),
-        })
-      : adj,
-    (withParent) => addBlockedByToAdj(withParent, issue),
-  );
+) => addBlockedByToAdj({ adj: addParentToAdj({ adj, issue }), issue });
 
-const initialAdjEntries = (allIds: ReadonlySet<string>) =>
-  pipe(
-    Array.from(allIds),
-    RA.map((id) => [id, []] as const),
-  );
+const setToArray = (ids: ReadonlySet<string>) => Array.from(ids);
+
+const initialAdjEntries = flow(
+  setToArray,
+  RA.map((id) => [id, []] as const),
+);
 
 const buildAdjacency = (
   allIds: ReadonlySet<string>,
   issues: ReadonlyArray<PlanIssueNode>,
 ) =>
-  pipe(
+  RA.reduce(new Map<string, ReadonlyArray<string>>(initialAdjEntries(allIds)), addDepsToAdj)(
     issues,
-    RA.reduce(new Map<string, ReadonlyArray<string>>(initialAdjEntries(allIds)), addDepsToAdj),
   );
 
 type DfsResult = {
@@ -130,33 +138,32 @@ const stepNeighbor = (
   acc: DfsResult,
   state: DfsState,
 ) =>
-  pipe(
-    acc.cycle,
-    O.match(
-      () => dfsNode(next, { ...state, visited: acc.visited }),
-      () => acc,
-    ),
-  );
+  O.match(
+    () => dfsNode(next, { ...state, visited: acc.visited }),
+    () => acc,
+  )(acc.cycle);
 
 const dfsNeighbors = (
   neighbors: ReadonlyArray<string>,
   state: DfsState,
 ) =>
-  pipe(
-    neighbors,
-    RA.reduce({ visited: state.visited, cycle: O.none }, (acc: DfsResult, next) =>
-      stepNeighbor(next, acc, state),
-    ),
-  );
+  RA.reduce({ visited: state.visited, cycle: O.none }, (acc: DfsResult, next: string) =>
+    stepNeighbor(next, acc, state),
+  )(neighbors);
+
+const finalizeExplore = (nodeId: string, res: DfsResult) => ({
+  visited: new Set([...res.visited, nodeId]),
+  cycle: res.cycle,
+});
 
 const exploreNode = (nodeId: string, state: DfsState) =>
-  pipe(
+  finalizeExplore(
+    nodeId,
     dfsNeighbors(state.adj.get(nodeId) ?? [], {
       ...state,
       path: [...state.path, nodeId],
       visiting: new Set([...state.visiting, nodeId]),
     }),
-    (res) => ({ visited: new Set([...res.visited, nodeId]), cycle: res.cycle }),
   );
 
 const dfsNode: DfsNodeFn = (nodeId, state) =>
@@ -178,67 +185,68 @@ const findCycle = (
   allIds: ReadonlySet<string>,
   adj: ReadonlyMap<string, ReadonlyArray<string>>,
 ) =>
-  pipe(
-    Array.from(allIds),
-    RA.reduce({ visited: new Set<string>(), cycle: O.none }, (acc: DfsResult, id) =>
-      O.isSome(acc.cycle) || acc.visited.has(id)
-        ? acc
-        : dfsNode(id, { path: [], visiting: new Set<string>(), visited: acc.visited, adj }),
-    ),
-    (res) => res.cycle,
-  );
+  RA.reduce({ visited: new Set<string>(), cycle: O.none }, (acc: DfsResult, id: string) =>
+    O.isSome(acc.cycle) || acc.visited.has(id)
+      ? acc
+      : dfsNode(id, { path: [], visiting: new Set<string>(), visited: acc.visited, adj }),
+  )(setToArray(allIds)).cycle;
+
+const formatCyclePath = (cycle: ReadonlyArray<string>) => cycle.join(' -> ');
+
+const formatCycleMessage = (cyclePath: string) =>
+  `Dependency cycle detected: ${cyclePath}`;
+
+const toCycleError = (cycle: ReadonlyArray<string>) => {
+  const cyclePath = formatCyclePath(cycle);
+  return {
+    type: 'PLAN_VALIDATION_ERROR',
+    message: isoMessage.wrap(formatCycleMessage(cyclePath)),
+    details: [isoMessage.wrap(cyclePath)],
+  } satisfies DomainError;
+};
 
 const checkCycles = (
   manifest: PlanManifest,
   allIds: ReadonlySet<string>,
 ) =>
-  pipe(
-    findCycle(allIds, buildAdjacency(allIds, manifest.issues)),
+  flow(
+    (issues: ReadonlyArray<PlanIssueNode>) => buildAdjacency(allIds, issues),
+    (adj) => findCycle(allIds, adj),
     O.match(
       () => E.right<DomainError, PlanManifest>(manifest),
-      (cycle) =>
-        E.left<DomainError, PlanManifest>({
-          type: 'PLAN_VALIDATION_ERROR',
-          message: isoMessage.wrap(`Dependency cycle detected: ${cycle.join(' -> ')}`),
-          details: [isoMessage.wrap(cycle.join(' -> '))],
-        }),
+      flow(toCycleError, E.left<DomainError, PlanManifest>),
     ),
-  );
+  )(manifest.issues);
 
 const collectAllRefErrors = (
   issues: ReadonlyArray<PlanIssueNode>,
   allIds: ReadonlySet<string>,
-) =>
-  pipe(
-    issues,
-    RA.flatMap((issue) => collectRefErrorsForIssue(issue, allIds)),
-  );
+) => RA.flatMap((issue: PlanIssueNode) => collectRefErrorsForIssue(issue, allIds))(issues);
 
-const wrapMessages = (msgs: ReadonlyArray<string>) => pipe(msgs, RA.map(isoMessage.wrap));
+const wrapMessages = RA.map(isoMessage.wrap);
 
 const validateReferences = (
   manifest: PlanManifest,
   allIds: ReadonlySet<string>,
   dupErrors: ReadonlyArray<string>,
-) =>
-  pipe(
-    [...dupErrors, ...collectAllRefErrors(manifest.issues, allIds)],
-    (allErrors) =>
-      match(allErrors.length > 0)
-        .with(true, () =>
-          E.left<DomainError, PlanManifest>({
-            type: 'PLAN_VALIDATION_ERROR',
-            message: isoMessage.wrap('Plan manifest reference validation failed'),
-            details: wrapMessages(allErrors),
-          }),
-        )
-        .with(false, () => checkCycles(manifest, allIds))
-        .exhaustive(),
-  );
+) => {
+  const allErrors = [...dupErrors, ...collectAllRefErrors(manifest.issues, allIds)];
+  return match(allErrors.length > 0)
+    .with(true, () =>
+      E.left<DomainError, PlanManifest>({
+        type: 'PLAN_VALIDATION_ERROR',
+        message: isoMessage.wrap('Plan manifest reference validation failed'),
+        details: wrapMessages(allErrors),
+      }),
+    )
+    .with(false, () => checkCycles(manifest, allIds))
+    .exhaustive();
+};
 
 export function validatePlanDag(manifest: PlanManifest) {
-  return pipe(
-    collectDuplicateErrors(manifest.issues, O.fromNullable(manifest.epic?.id)),
-    ({ allIds, errors }) => validateReferences(manifest, allIds, errors),
+  const { allIds, errors } = collectDuplicateErrors(
+    manifest.issues,
+    O.fromNullable(manifest.epic?.id),
   );
+  return validateReferences(manifest, allIds, errors);
 }

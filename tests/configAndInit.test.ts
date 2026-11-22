@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { Octokit } from '@octokit/rest';
 import * as E from 'fp-ts/lib/Either';
-import { flow, pipe } from 'fp-ts/lib/function';
+import { flow } from 'fp-ts/lib/function';
 import * as RA from 'fp-ts/lib/ReadonlyArray';
 import { match } from 'ts-pattern';
 import { describe, expect, it, vi } from 'vitest';
@@ -72,25 +72,24 @@ workspace:
 
   it('rejects custom provider without agent.command', () => {
     expect(
-      pipe(
-        parseConfig(`version: 1
+      flow(parseConfig, E.isLeft)(`version: 1
 workspace:
   verifyCommand: "pytest"
 agent:
   provider: custom
 `),
-        E.isLeft,
-      ),
     ).toBe(true);
   });
 });
 
 describe('generateInitFiles', () => {
   it('creates target repo footprint and respects force flag', () => {
-    const tmpDir = pipe(path.join(os.tmpdir(), 'pr-flow-init-'), (prefix: string) =>
-      fs.mkdtempSync(prefix),
-    );
-    const hasFile = (rel: string) => pipe(path.join(tmpDir, rel), fs.existsSync);
+    const tmpDir = flow(
+      os.tmpdir,
+      (dir) => path.join(dir, 'pr-flow-init-'),
+      (p: string) => fs.mkdtempSync(p, 'utf-8'),
+    )();
+    const hasFile = flow((rel: string) => path.join(tmpDir, rel), fs.existsSync);
     const readFile = flow(
       (rel: string) => path.join(tmpDir, rel),
       (p) => fs.readFileSync(p, 'utf-8'),
@@ -304,10 +303,7 @@ describe('createOctokitGitHubAdapter.checkSetupPrerequisites', () => {
       .with({ _tag: 'Right' }, ({ right }) => {
         expect(right).toHaveLength(5);
         expect(
-          pipe(
-            right,
-            RA.every((c) => c.outcome === 'pass'),
-          ),
+          RA.every((c: (typeof right)[number]) => c.outcome === 'pass')(right),
         ).toBe(true);
       })
       .with({ _tag: 'Left' }, () => {
@@ -351,10 +347,7 @@ describe('createOctokitGitHubAdapter.checkSetupPrerequisites', () => {
     match(res)
       .with({ _tag: 'Right' }, ({ right }) => {
         const byName = new Map(
-          pipe(
-            right,
-            RA.map((c) => [c.name, c] as const),
-          ),
+          RA.map((c: (typeof right)[number]) => [c.name, c] as const)(right),
         );
         expect(byName.get('pr-flow repository visibility')?.outcome).toBe('warn');
         expect(byName.get('Actions PR permissions')?.outcome).toBe('fail');

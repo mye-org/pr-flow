@@ -1,3 +1,4 @@
+import { flow } from 'fp-ts/lib/function';
 import { assign, setup, transition } from 'xstate';
 import type { Effect } from '../domain/effects.js';
 import type { IssueEvent } from '../domain/events.js';
@@ -10,6 +11,7 @@ import {
   isoMessage,
   isoPrNumber,
   type IssueNumber,
+  type Message,
 } from '../domain/newtypes.js';
 
 export type IssueMachineContext = {
@@ -37,6 +39,131 @@ const canRetryEvent = (event: IssueEvent) =>
     ? isoCount.unwrap(event.retryCount) < isoCount.unwrap(event.maxRetries)
     : false;
 
+const appendCommentEffect = (context: IssueMachineContext, body: Body) => ({
+  effects: appendEffect(context.effects, {
+    type: 'ADD_COMMENT',
+    issueNumber: context.issueNumber,
+    body,
+  }),
+});
+
+const formatLabeledDetail = (headline: string, label: string, detail: string) =>
+  `${headline}\n\n**${label}:** ${detail}`;
+
+const buildLabeledBody = (headline: string, label: string, detail: Message) =>
+  flow(
+    isoMessage.unwrap,
+    (detailText) => formatLabeledDetail(headline, label, detailText),
+    isoBody.wrap,
+  )(detail);
+
+const buildBodyWithReason = (headline: string, reason: Message) =>
+  buildLabeledBody(headline, 'Reason', reason);
+
+const formatPrOpenedHeadline = (prNumber: number, branch: string) =>
+  `PR #${String(prNumber)} opened on branch \`${branch}\`.`;
+
+function buildPrOpenedHeadline(
+  event: Extract<IssueEvent, { readonly type: 'EXECUTION_SUCCEEDED' }>,
+) {
+  return formatPrOpenedHeadline(
+    isoPrNumber.unwrap(event.prNumber),
+    isoBranchName.unwrap(event.branch),
+  );
+}
+
+function buildPrOpenedBody(
+  event: Extract<IssueEvent, { readonly type: 'EXECUTION_SUCCEEDED' }>,
+) {
+  return buildLabeledBody(buildPrOpenedHeadline(event), 'Summary', event.summary);
+}
+
+const buildExecutionFailedBody = (
+  event: Extract<IssueEvent, { readonly type: 'EXECUTION_FAILED' }>,
+) =>
+  buildBodyWithReason(
+    'Automated execution failed and requires human intervention.',
+    event.reason,
+  );
+
+const formatTransientRetryHeadline = (attempt: number, maxRetries: number) =>
+  `<!-- pr-flow:retries=${String(attempt)} -->\nTransient agent API error (attempt ${String(attempt)}/${String(maxRetries)}); re-queued \`pr-flow-status\` to \`ready\` for automatic retry.`;
+
+function buildTransientRetryHeadline(
+  event: Extract<IssueEvent, { readonly type: 'TRANSIENT_EXECUTION_FAILED' }>,
+) {
+  return formatTransientRetryHeadline(
+    isoCount.unwrap(event.retryCount) + 1,
+    isoCount.unwrap(event.maxRetries),
+  );
+}
+
+function buildTransientRetryBody(
+  event: Extract<IssueEvent, { readonly type: 'TRANSIENT_EXECUTION_FAILED' }>,
+) {
+  return buildBodyWithReason(buildTransientRetryHeadline(event), event.reason);
+}
+
+const formatTransientExhaustedHeadline = (maxRetries: number) =>
+  `Automated execution failed after ${String(maxRetries)} transient retries and requires human intervention.`;
+
+function buildTransientExhaustedHeadline(
+  event: Extract<IssueEvent, { readonly type: 'TRANSIENT_EXECUTION_FAILED' }>,
+) {
+  return formatTransientExhaustedHeadline(isoCount.unwrap(event.maxRetries));
+}
+
+function buildTransientExhaustedBody(
+  event: Extract<IssueEvent, { readonly type: 'TRANSIENT_EXECUTION_FAILED' }>,
+) {
+  return buildBodyWithReason(buildTransientExhaustedHeadline(event), event.reason);
+}
+
+const buildNeedsHumanBody = (
+  event: Extract<IssueEvent, { readonly type: 'NEEDS_HUMAN_DETECTED' }>,
+) => buildBodyWithReason('AI agent requested human clarification.', event.reason);
+
+const formatReviewTransientRetryHeadline = (attempt: number, maxRetries: number) =>
+  `<!-- pr-flow:retries=${String(attempt)} -->\nTransient agent API error during review follow-up (attempt ${String(attempt)}/${String(maxRetries)}); keeping \`pr-flow-status\` in \`review-pending\`.`;
+
+function buildReviewTransientRetryHeadline(
+  event: Extract<IssueEvent, { readonly type: 'TRANSIENT_EXECUTION_FAILED' }>,
+) {
+  return formatReviewTransientRetryHeadline(
+    isoCount.unwrap(event.retryCount) + 1,
+    isoCount.unwrap(event.maxRetries),
+  );
+}
+
+function buildReviewTransientRetryBody(
+  event: Extract<IssueEvent, { readonly type: 'TRANSIENT_EXECUTION_FAILED' }>,
+) {
+  return buildBodyWithReason(buildReviewTransientRetryHeadline(event), event.reason);
+}
+
+const formatReviewTransientExhaustedHeadline = (maxRetries: number) =>
+  `Review follow-up failed after ${String(maxRetries)} transient retries.`;
+
+function buildReviewTransientExhaustedHeadline(
+  event: Extract<IssueEvent, { readonly type: 'TRANSIENT_EXECUTION_FAILED' }>,
+) {
+  return formatReviewTransientExhaustedHeadline(isoCount.unwrap(event.maxRetries));
+}
+
+function buildReviewTransientExhaustedBody(
+  event: Extract<IssueEvent, { readonly type: 'TRANSIENT_EXECUTION_FAILED' }>,
+) {
+  return buildBodyWithReason(buildReviewTransientExhaustedHeadline(event), event.reason);
+}
+
+const buildReviewFailedBody = (
+  event: Extract<IssueEvent, { readonly type: 'EXECUTION_FAILED' }>,
+) => buildBodyWithReason('Review follow-up failed.', event.reason);
+
+const buildReviewNeedsHumanBody = (
+  event: Extract<IssueEvent, { readonly type: 'NEEDS_HUMAN_DETECTED' }>,
+) => buildBodyWithReason('Review follow-up requested human intervention.', event.reason);
+
 export const issueMachine = setup({
   types: {
     context: {} as IssueMachineContext,
@@ -55,13 +182,9 @@ export const issueMachine = setup({
         transition: { kind: 'transition', from: params.from, to: params.to },
       }),
     })),
-    emitComment: assign(({ context }, params: { readonly body: Body }) => ({
-      effects: appendEffect(context.effects, {
-        type: 'ADD_COMMENT',
-        issueNumber: context.issueNumber,
-        body: params.body,
-      }),
-    })),
+    emitComment: assign(({ context }, params: { readonly body: Body }) =>
+      appendCommentEffect(context, params.body),
+    ),
     emitCloseIssue: assign(({ context }) => ({
       effects: appendEffect(context.effects, {
         type: 'CLOSE_ISSUE',
@@ -141,30 +264,16 @@ export const issueMachine = setup({
           target: 'review_pending',
           actions: [
             { type: 'emitStatusFieldSet', params: { from: 'in_progress', to: 'review_pending' } },
-            assign(({ context, event }) => ({
-              effects: appendEffect(context.effects, {
-                type: 'ADD_COMMENT',
-                issueNumber: context.issueNumber,
-                body: isoBody.wrap(
-                  `PR #${String(isoPrNumber.unwrap(event.prNumber))} opened on branch \`${isoBranchName.unwrap(event.branch)}\`.\n\n**Summary:** ${isoMessage.unwrap(event.summary)}`,
-                ),
-              }),
-            })),
+            assign(({ context, event }) => appendCommentEffect(context, buildPrOpenedBody(event))),
           ],
         },
         EXECUTION_FAILED: {
           target: 'needs_human',
           actions: [
             { type: 'emitStatusFieldSet', params: { from: 'in_progress', to: 'needs_human' } },
-            assign(({ context, event }) => ({
-              effects: appendEffect(context.effects, {
-                type: 'ADD_COMMENT',
-                issueNumber: context.issueNumber,
-                body: isoBody.wrap(
-                  `Automated execution failed and requires human intervention.\n\n**Reason:** ${isoMessage.unwrap(event.reason)}`,
-                ),
-              }),
-            })),
+            assign(({ context, event }) =>
+              appendCommentEffect(context, buildExecutionFailedBody(event)),
+            ),
           ],
         },
         TRANSIENT_EXECUTION_FAILED: [
@@ -173,30 +282,18 @@ export const issueMachine = setup({
             target: 'ready',
             actions: [
               { type: 'emitStatusFieldSet', params: { from: 'in_progress', to: 'ready' } },
-              assign(({ context, event }) => ({
-                effects: appendEffect(context.effects, {
-                  type: 'ADD_COMMENT',
-                  issueNumber: context.issueNumber,
-                  body: isoBody.wrap(
-                    `<!-- pr-flow:retries=${String(isoCount.unwrap(event.retryCount) + 1)} -->\nTransient agent API error (attempt ${String(isoCount.unwrap(event.retryCount) + 1)}/${String(isoCount.unwrap(event.maxRetries))}); re-queued \`pr-flow-status\` to \`ready\` for automatic retry.\n\n**Reason:** ${isoMessage.unwrap(event.reason)}`,
-                  ),
-                }),
-              })),
+              assign(({ context, event }) =>
+                appendCommentEffect(context, buildTransientRetryBody(event)),
+              ),
             ],
           },
           {
             target: 'needs_human',
             actions: [
               { type: 'emitStatusFieldSet', params: { from: 'in_progress', to: 'needs_human' } },
-              assign(({ context, event }) => ({
-                effects: appendEffect(context.effects, {
-                  type: 'ADD_COMMENT',
-                  issueNumber: context.issueNumber,
-                  body: isoBody.wrap(
-                    `Automated execution failed after ${String(isoCount.unwrap(event.maxRetries))} transient retries and requires human intervention.\n\n**Reason:** ${isoMessage.unwrap(event.reason)}`,
-                  ),
-                }),
-              })),
+              assign(({ context, event }) =>
+                appendCommentEffect(context, buildTransientExhaustedBody(event)),
+              ),
             ],
           },
         ],
@@ -204,15 +301,7 @@ export const issueMachine = setup({
           target: 'needs_human',
           actions: [
             { type: 'emitStatusFieldSet', params: { from: 'in_progress', to: 'needs_human' } },
-            assign(({ context, event }) => ({
-              effects: appendEffect(context.effects, {
-                type: 'ADD_COMMENT',
-                issueNumber: context.issueNumber,
-                body: isoBody.wrap(
-                  `AI agent requested human clarification.\n\n**Reason:** ${isoMessage.unwrap(event.reason)}`,
-                ),
-              }),
-            })),
+            assign(({ context, event }) => appendCommentEffect(context, buildNeedsHumanBody(event))),
           ],
         },
         PR_MERGED: {
@@ -241,29 +330,17 @@ export const issueMachine = setup({
           {
             guard: 'canRetry',
             target: 'review_pending',
-            actions: assign(({ context, event }) => ({
-              effects: appendEffect(context.effects, {
-                type: 'ADD_COMMENT',
-                issueNumber: context.issueNumber,
-                body: isoBody.wrap(
-                  `<!-- pr-flow:retries=${String(isoCount.unwrap(event.retryCount) + 1)} -->\nTransient agent API error during review follow-up (attempt ${String(isoCount.unwrap(event.retryCount) + 1)}/${String(isoCount.unwrap(event.maxRetries))}); keeping \`pr-flow-status\` in \`review-pending\`.\n\n**Reason:** ${isoMessage.unwrap(event.reason)}`,
-                ),
-              }),
-            })),
+            actions: assign(({ context, event }) =>
+              appendCommentEffect(context, buildReviewTransientRetryBody(event)),
+            ),
           },
           {
             target: 'needs_human',
             actions: [
               { type: 'emitStatusFieldSet', params: { from: 'review_pending', to: 'needs_human' } },
-              assign(({ context, event }) => ({
-                effects: appendEffect(context.effects, {
-                  type: 'ADD_COMMENT',
-                  issueNumber: context.issueNumber,
-                  body: isoBody.wrap(
-                    `Review follow-up failed after ${String(isoCount.unwrap(event.maxRetries))} transient retries.\n\n**Reason:** ${isoMessage.unwrap(event.reason)}`,
-                  ),
-                }),
-              })),
+              assign(({ context, event }) =>
+                appendCommentEffect(context, buildReviewTransientExhaustedBody(event)),
+              ),
             ],
           },
         ],
@@ -271,30 +348,18 @@ export const issueMachine = setup({
           target: 'needs_human',
           actions: [
             { type: 'emitStatusFieldSet', params: { from: 'review_pending', to: 'needs_human' } },
-            assign(({ context, event }) => ({
-              effects: appendEffect(context.effects, {
-                type: 'ADD_COMMENT',
-                issueNumber: context.issueNumber,
-                body: isoBody.wrap(
-                  `Review follow-up failed.\n\n**Reason:** ${isoMessage.unwrap(event.reason)}`,
-                ),
-              }),
-            })),
+            assign(({ context, event }) =>
+              appendCommentEffect(context, buildReviewFailedBody(event)),
+            ),
           ],
         },
         NEEDS_HUMAN_DETECTED: {
           target: 'needs_human',
           actions: [
             { type: 'emitStatusFieldSet', params: { from: 'review_pending', to: 'needs_human' } },
-            assign(({ context, event }) => ({
-              effects: appendEffect(context.effects, {
-                type: 'ADD_COMMENT',
-                issueNumber: context.issueNumber,
-                body: isoBody.wrap(
-                  `Review follow-up requested human intervention.\n\n**Reason:** ${isoMessage.unwrap(event.reason)}`,
-                ),
-              }),
-            })),
+            assign(({ context, event }) =>
+              appendCommentEffect(context, buildReviewNeedsHumanBody(event)),
+            ),
           ],
         },
       },

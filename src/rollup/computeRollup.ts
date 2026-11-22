@@ -1,4 +1,4 @@
-import { pipe } from 'fp-ts/lib/function';
+import { flow } from 'fp-ts/lib/function';
 import * as RA from 'fp-ts/lib/ReadonlyArray';
 import { match } from 'ts-pattern';
 import type { Effect } from '../domain/effects.js';
@@ -16,6 +16,11 @@ const computeNonEmptyStatus = (statuses: ReadonlyArray<IssueStatus>) =>
     .when(RA.some((s) => s === 'blocked_dep'), () => 'blocked_dep' as const)
     .otherwise(() => 'backlog' as const);
 
+const computeStatusFromChildren = flow(
+  RA.map((c: Pick<IssueNode, 'status'>) => c.status),
+  computeNonEmptyStatus,
+);
+
 /**
  * Pure rollup status computation for container issues (Epics and non-leaf Stories).
  * Priority order:
@@ -29,20 +34,16 @@ const computeNonEmptyStatus = (statuses: ReadonlyArray<IssueStatus>) =>
 export function computeContainerStatus(children: ReadonlyArray<Pick<IssueNode, 'status'>>) {
   return match(children.length === 0)
     .with(true, () => 'backlog' as const)
-    .with(false, () =>
-      pipe(
-        children,
-        RA.map((c) => c.status),
-        computeNonEmptyStatus,
-      ),
-    )
+    .with(false, () => computeStatusFromChildren(children))
     .exhaustive();
 }
 
-const buildStatusEffects = (
-  parent: Pick<IssueNode, 'number' | 'status'>,
-  targetStatus: IssueStatus,
-) =>
+type RollupTarget = {
+  readonly parent: Pick<IssueNode, 'number' | 'status' | 'state'>;
+  readonly targetStatus: IssueStatus;
+};
+
+const buildStatusEffects = ({ parent, targetStatus }: RollupTarget) =>
   match(targetStatus !== parent.status)
     .with(true, () =>
       [
@@ -56,10 +57,7 @@ const buildStatusEffects = (
     .with(false, () => [] satisfies ReadonlyArray<Effect>)
     .exhaustive();
 
-const buildLifecycleEffects = (
-  parent: Pick<IssueNode, 'number' | 'state'>,
-  targetStatus: IssueStatus,
-) =>
+const buildLifecycleEffects = ({ parent, targetStatus }: RollupTarget) =>
   match([targetStatus, parent.state] as const)
     .with(['fixed', 'open'], () =>
       [{ type: 'CLOSE_ISSUE', issueNumber: parent.number }] satisfies ReadonlyArray<Effect>,
@@ -75,15 +73,17 @@ const buildLifecycleEffects = (
     )
     .otherwise(() => [] satisfies ReadonlyArray<Effect>);
 
+const toRollupResult = (target: RollupTarget) => ({
+  targetStatus: target.targetStatus,
+  effects: [
+    ...buildStatusEffects(target),
+    ...buildLifecycleEffects(target),
+  ] satisfies ReadonlyArray<Effect>,
+});
+
 export function computeRollupEffects(
   parent: Pick<IssueNode, 'number' | 'status' | 'state'>,
   children: ReadonlyArray<Pick<IssueNode, 'status'>>,
 ) {
-  return pipe(computeContainerStatus(children), (targetStatus) => ({
-    targetStatus,
-    effects: [
-      ...buildStatusEffects(parent, targetStatus),
-      ...buildLifecycleEffects(parent, targetStatus),
-    ] satisfies ReadonlyArray<Effect>,
-  }));
+  return toRollupResult({ parent, targetStatus: computeContainerStatus(children) });
 }

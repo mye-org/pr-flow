@@ -1,5 +1,5 @@
 import * as E from 'fp-ts/lib/Either';
-import { pipe } from 'fp-ts/lib/function';
+import { flow } from 'fp-ts/lib/function';
 import * as RA from 'fp-ts/lib/ReadonlyArray';
 import { match } from 'ts-pattern';
 import { parse as parseYaml } from 'yaml';
@@ -42,6 +42,40 @@ export const PrFlowConfigSchema = z.object({
 
 export type PrFlowConfig = z.infer<typeof PrFlowConfigSchema>;
 
+const formatZodIssue = (issue: z.core.$ZodIssue) =>
+  `${issue.path.join('.')}: ${issue.message}`;
+
+const joinIssueMessages = (parts: ReadonlyArray<string>) => parts.join('; ');
+
+const prefixInvalidConfig = (detail: string) => `Invalid pr-flow.config.yml: ${detail}`;
+
+const formatInvalidConfigMessage = flow(
+  RA.map(formatZodIssue),
+  joinIssueMessages,
+  prefixInvalidConfig,
+);
+
+const toInvalidConfigError = (issues: ReadonlyArray<z.core.$ZodIssue>) =>
+  ({
+    type: 'CONFIG_ERROR',
+    message: isoMessage.wrap(formatInvalidConfigMessage(issues)),
+  }) satisfies DomainError;
+
+const formatParseConfigMessage = (errMessage: string) =>
+  `Failed to parse pr-flow.config.yml: ${errMessage}`;
+
+const toParseConfigError = (errMessage: string) =>
+  ({
+    type: 'CONFIG_ERROR',
+    message: isoMessage.wrap(formatParseConfigMessage(errMessage)),
+  }) satisfies DomainError;
+
+const buildParseConfigError = flow(
+  E.toError,
+  (err) => err.message,
+  toParseConfigError,
+);
+
 const validateCustomAgentCommand = (config: PrFlowConfig) =>
   match(config.agent.provider === 'custom' && !config.agent.command)
     .with(true, () =>
@@ -57,30 +91,14 @@ const validateConfigSchema = (parsed: z.ZodSafeParseResult<PrFlowConfig>) =>
   match(parsed)
     .with({ success: true }, ({ data }) => validateCustomAgentCommand(data))
     .with({ success: false }, ({ error }) =>
-      E.left<DomainError, PrFlowConfig>({
-        type: 'CONFIG_ERROR',
-        message: isoMessage.wrap(
-          `Invalid pr-flow.config.yml: ${pipe(
-            error.issues,
-            RA.map((i) => `${i.path.join('.')}: ${i.message}`),
-          ).join('; ')}`,
-        ),
-      }),
+      E.left<DomainError, PrFlowConfig>(toInvalidConfigError(error.issues)),
     )
     .exhaustive();
 
-export function parseConfig(yamlContent: string) {
-  return pipe(
-    E.tryCatch(
-      () => PrFlowConfigSchema.safeParse(parseYaml(yamlContent)),
-      (err) =>
-        ({
-          type: 'CONFIG_ERROR',
-          message: isoMessage.wrap(
-            `Failed to parse pr-flow.config.yml: ${err instanceof Error ? err.message : String(err)}`,
-          ),
-        }) satisfies DomainError,
-    ),
-    E.flatMap(validateConfigSchema),
+const tryParseConfigYaml = (yamlContent: string) =>
+  E.tryCatch(
+    () => PrFlowConfigSchema.safeParse(parseYaml(yamlContent)),
+    buildParseConfigError,
   );
-}
+
+export const parseConfig = flow(tryParseConfigYaml, E.flatMap(validateConfigSchema));

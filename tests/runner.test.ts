@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as E from 'fp-ts/lib/Either';
-import { pipe } from 'fp-ts/lib/function';
+import { flow } from 'fp-ts/lib/function';
 import { match } from 'ts-pattern';
 import { describe, expect, it } from 'vitest';
 import { buildImplementPrompt, buildReviewPrompt } from '../src/adapters/agent/prompts.js';
@@ -24,6 +24,12 @@ import {
   isoLabelName,
   isoTitle,
 } from '../src/domain/newtypes.js';
+
+const makeTempDir = flow(
+  (prefix: string) => [os.tmpdir(), prefix] as const,
+  ([dir, prefix]) => path.join(dir, prefix),
+  (p: string) => fs.mkdtempSync(p, 'utf-8'),
+);
 
 describe('isTransientAgentError', () => {
   it('detects 503, 429, UNAVAILABLE, fetch failed, and timeouts as transient', () => {
@@ -172,9 +178,7 @@ describe('buildGeminiSettings', () => {
 
 describe('runAgentExecution', () => {
   it('preserves needs_human result without overwriting it when verifyCommand fails', () => {
-    const tmpDir = pipe(path.join(os.tmpdir(), 'pr-flow-runner-'), (prefix: string) =>
-      fs.mkdtempSync(prefix),
-    );
+    const tmpDir = makeTempDir('pr-flow-runner-');
     try {
       const res = runAgentExecution({
         config: {
@@ -227,9 +231,7 @@ describe('runAgentExecution', () => {
 
   it('loops verifyCommand failures back to the agent until fixed and preserves resolvedComments', async () => {
     const { execFileSync } = await import('node:child_process');
-    const tmpDir = pipe(path.join(os.tmpdir(), 'pr-flow-verify-fix-'), (prefix: string) =>
-      fs.mkdtempSync(prefix),
-    );
+    const tmpDir = makeTempDir('pr-flow-verify-fix-');
     try {
       execFileSync('git', ['init'], { cwd: tmpDir, stdio: 'pipe' });
       execFileSync('git', ['config', 'user.name', 'Test'], { cwd: tmpDir, stdio: 'pipe' });
@@ -300,9 +302,7 @@ fi
 
   it('exports partial changes.patch when verifyCommand still fails after maxVerifyRetries', async () => {
     const { execFileSync } = await import('node:child_process');
-    const tmpDir = pipe(path.join(os.tmpdir(), 'pr-flow-verify-fail-'), (prefix: string) =>
-      fs.mkdtempSync(prefix),
-    );
+    const tmpDir = makeTempDir('pr-flow-verify-fail-');
     try {
       execFileSync('git', ['init'], { cwd: tmpDir, stdio: 'pipe' });
       execFileSync('git', ['config', 'user.name', 'Test'], { cwd: tmpDir, stdio: 'pipe' });

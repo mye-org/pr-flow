@@ -1,5 +1,5 @@
 import * as E from 'fp-ts/lib/Either';
-import { pipe } from 'fp-ts/lib/function';
+import { flow } from 'fp-ts/lib/function';
 import * as RA from 'fp-ts/lib/ReadonlyArray';
 import { match } from 'ts-pattern';
 import { describe, expect, it } from 'vitest';
@@ -60,17 +60,14 @@ describe('isExecutableLeaf', () => {
 describe('checkPickupEligibility', () => {
   it('allows pickup when all guards pass', () => {
     expect(
-      pipe(
-        checkPickupEligibility({
-          issue: makeIssue(),
-          wipCount: isoCount.wrap(3),
-          wipLimit: isoCount.wrap(4),
-          openPrCount: isoCount.wrap(0),
-          blockerState: 'all_closed',
-          blockingIssues: [],
-        }),
-        E.isRight,
-      ),
+      flow(checkPickupEligibility, E.isRight)({
+        issue: makeIssue(),
+        wipCount: isoCount.wrap(3),
+        wipLimit: isoCount.wrap(4),
+        openPrCount: isoCount.wrap(0),
+        blockerState: 'all_closed',
+        blockingIssues: [],
+      }),
     ).toBe(true);
   });
 
@@ -202,10 +199,7 @@ describe('issueMachine transitions', () => {
     });
     expect(res.nextStatus).toBe('needs_human');
     expect(
-      pipe(
-        res.effects,
-        RA.some((e) => e.type === 'ADD_COMMENT'),
-      ),
+      RA.some((e: (typeof res.effects)[number]) => e.type === 'ADD_COMMENT')(res.effects),
     ).toBe(true);
   });
 
@@ -269,10 +263,7 @@ describe('issueMachine transitions', () => {
       transition: { kind: 'transition', from: 'review_pending', to: 'needs_human' },
     });
     expect(
-      pipe(
-        res.effects,
-        RA.some((e) => e.type === 'ADD_COMMENT'),
-      ),
+      RA.some((e: (typeof res.effects)[number]) => e.type === 'ADD_COMMENT')(res.effects),
     ).toBe(true);
   });
 

@@ -1,5 +1,5 @@
 import * as E from 'fp-ts/lib/Either';
-import { pipe } from 'fp-ts/lib/function';
+import { flow } from 'fp-ts/lib/function';
 import * as RA from 'fp-ts/lib/ReadonlyArray';
 import * as TE from 'fp-ts/lib/TaskEither';
 import { match } from 'ts-pattern';
@@ -41,12 +41,12 @@ describe('planner DAG validation & topoSort', () => {
     expect(E.isRight(parsed)).toBe(true);
     match(parsed)
       .with({ _tag: 'Right' }, ({ right }) => {
-        expect(pipe(right, validatePlanDag, E.isRight)).toBe(true);
+        expect(flow(validatePlanDag, E.isRight)(right)).toBe(true);
 
-        const ids = pipe(
-          topoSortPlan(right),
+        const ids = flow(
+          topoSortPlan,
           RA.map((n) => n.id),
-        );
+        )(right);
         expect(ids.indexOf('story-core')).toBeLessThan(ids.indexOf('task-jwt'));
         expect(ids.indexOf('task-jwt')).toBeLessThan(ids.indexOf('task-middleware'));
       })
@@ -99,7 +99,7 @@ issues:
     expect(E.isRight(selfParent)).toBe(true);
     match(selfParent)
       .with({ _tag: 'Right' }, ({ right }) => {
-        expect(pipe(right, validatePlanDag, E.isLeft)).toBe(true);
+        expect(flow(validatePlanDag, E.isLeft)(right)).toBe(true);
       })
       .with({ _tag: 'Left' }, () => {
         expect.unreachable('Expected Right');
@@ -120,7 +120,7 @@ issues:
     expect(E.isRight(parentCycle)).toBe(true);
     match(parentCycle)
       .with({ _tag: 'Right' }, ({ right }) => {
-        expect(pipe(right, validatePlanDag, E.isLeft)).toBe(true);
+        expect(flow(validatePlanDag, E.isLeft)(right)).toBe(true);
       })
       .with({ _tag: 'Left' }, () => {
         expect.unreachable('Expected Right');
@@ -141,7 +141,7 @@ issues:
     expect(E.isRight(crossCycle)).toBe(true);
     match(crossCycle)
       .with({ _tag: 'Right' }, ({ right }) => {
-        expect(pipe(right, validatePlanDag, E.isLeft)).toBe(true);
+        expect(flow(validatePlanDag, E.isLeft)(right)).toBe(true);
       })
       .with({ _tag: 'Left' }, () => {
         expect.unreachable('Expected Right');
@@ -193,15 +193,12 @@ issues:
             expect(subLinks).toHaveLength(3);
             expect(depLinks).toHaveLength(1);
             expect(createdBodies).toHaveLength(4);
-            pipe(
-              createdBodies,
-              RA.map((created) => {
-                expect(created.body).toContain('declarative programming style');
-                expect(created.body).toContain('TypeScript type-driven development');
-                expect(created.body).toContain('functional programming style');
-                return undefined;
-              }),
-            );
+            RA.map((created: Pick<CreateIssueInput, 'title' | 'body'>) => {
+              expect(created.body).toContain('declarative programming style');
+              expect(created.body).toContain('TypeScript type-driven development');
+              expect(created.body).toContain('functional programming style');
+              return undefined;
+            })(createdBodies);
             expect(createdBodies[0]?.body).toBe(`End-to-end auth\n\n${ISSUE_DEVELOPMENT_STANDARDS}`);
             expect(createdBodies[1]?.body).toBe(ISSUE_DEVELOPMENT_STANDARDS);
           })

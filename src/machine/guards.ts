@@ -1,5 +1,5 @@
 import * as E from 'fp-ts/lib/Either';
-import { pipe } from 'fp-ts/lib/function';
+import { flow } from 'fp-ts/lib/function';
 import type { GuardError } from '../domain/errors.js';
 import type { BlockerState } from '../domain/events.js';
 import { isExecutableLeaf, type IssueNode } from '../domain/issue.js';
@@ -66,13 +66,11 @@ const checkWipLimit = (ctx: PickupGuardContext) =>
     }),
   )(ctx);
 
-export function checkPickupEligibility(ctx: PickupGuardContext) {
-  return pipe(
-    checkLeaf(ctx),
-    E.flatMap(checkReadyState),
-    E.flatMap(checkBlockers),
-    E.flatMap(checkNoOpenPr),
-    E.flatMap(checkWipLimit),
-    E.map(() => 'eligible' as const),
-  );
-}
+export const checkPickupEligibility = flow(
+  checkLeaf,
+  E.flatMap(checkReadyState),
+  E.flatMap(checkBlockers),
+  E.flatMap(checkNoOpenPr),
+  E.flatMap(checkWipLimit),
+  E.map(() => 'eligible' as const),
+);

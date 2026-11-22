@@ -1,5 +1,5 @@
 import * as E from 'fp-ts/lib/Either';
-import { flow, pipe } from 'fp-ts/lib/function';
+import { flow } from 'fp-ts/lib/function';
 import * as RA from 'fp-ts/lib/ReadonlyArray';
 import { match } from 'ts-pattern';
 import { parse as parseYaml } from 'yaml';
@@ -34,6 +34,11 @@ export const PlanManifestSchema = z.object({
 export type PlanIssueNode = z.infer<typeof PlanIssueNodeSchema>;
 export type PlanManifest = z.infer<typeof PlanManifestSchema>;
 
+const formatPlanIssueText = (issue: z.core.$ZodIssue) =>
+  `${issue.path.join('.')}: ${issue.message}`;
+
+const toPlanIssueMessage = flow(formatPlanIssueText, isoMessage.wrap);
+
 const validatePlanSchema = (parsed: z.ZodSafeParseResult<PlanManifest>) =>
   match(parsed)
     .with({ success: true }, ({ data }) => E.right(data))
@@ -41,10 +46,7 @@ const validatePlanSchema = (parsed: z.ZodSafeParseResult<PlanManifest>) =>
       E.left<DomainError, PlanManifest>({
         type: 'PLAN_VALIDATION_ERROR',
         message: isoMessage.wrap('Invalid plan manifest YAML'),
-        details: pipe(
-          error.issues,
-          RA.map((i) => isoMessage.wrap(`${i.path.join('.')}: ${i.message}`)),
-        ),
+        details: RA.map(toPlanIssueMessage)(error.issues),
       }),
     )
     .exhaustive();
@@ -54,19 +56,19 @@ const parsePlanYaml = flow(
   (raw) => PlanManifestSchema.safeParse(raw),
 );
 
+const formatPlanYamlErrorMessage = (errMessage: string) =>
+  `Failed to parse plan manifest YAML: ${errMessage}`;
+
 const formatPlanYamlError = (errMessage: string) =>
   ({
     type: 'PLAN_VALIDATION_ERROR',
-    message: isoMessage.wrap(`Failed to parse plan manifest YAML: ${errMessage}`),
+    message: isoMessage.wrap(formatPlanYamlErrorMessage(errMessage)),
     details: [],
   }) satisfies DomainError;
 
-export function parsePlanManifest(yamlContent: string) {
-  return pipe(
-    E.tryCatch(
-      () => parsePlanYaml(yamlContent),
-      (err) => formatPlanYamlError(err instanceof Error ? err.message : String(err)),
-    ),
-    E.flatMap(validatePlanSchema),
-  );
-}
+const toPlanYamlError = flow(E.toError, (err) => err.message, formatPlanYamlError);
+
+const tryParsePlanYaml = (yamlContent: string) =>
+  E.tryCatch(() => parsePlanYaml(yamlContent), toPlanYamlError);
+
+export const parsePlanManifest = flow(tryParsePlanYaml, E.flatMap(validatePlanSchema));

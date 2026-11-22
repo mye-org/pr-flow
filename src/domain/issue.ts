@@ -1,4 +1,4 @@
-import { pipe } from 'fp-ts/lib/function';
+import { flow } from 'fp-ts/lib/function';
 import * as O from 'fp-ts/lib/Option';
 import * as RA from 'fp-ts/lib/ReadonlyArray';
 import * as RR from 'fp-ts/lib/ReadonlyRecord';
@@ -46,11 +46,13 @@ export const STATUS_TO_FIELD_VALUE: Readonly<Record<IssueStatus, string>> = {
   needs_human: 'needs-human',
 };
 
+const invertStatusEntries = flow(
+  (record: Readonly<Record<IssueStatus, string>>) => RR.toEntries(record),
+  RA.map(([status, value]) => [value, status] as const),
+);
+
 export const FIELD_VALUE_TO_STATUS: Readonly<Record<string, IssueStatus>> = Object.fromEntries(
-  pipe(
-    RR.toEntries(STATUS_TO_FIELD_VALUE),
-    RA.map(([status, value]) => [value, status] as const),
-  ),
+  invertStatusEntries(STATUS_TO_FIELD_VALUE),
 );
 
 export type IssueFieldOptionDefinition = {
@@ -104,11 +106,16 @@ export const TYPE_TO_LABEL: Readonly<Record<IssueType, LabelName>> = {
   bug: isoLabelName.wrap('type:bug'),
 };
 
+const labelEntryToType = ([type, label]: readonly [IssueType, LabelName]) =>
+  [isoLabelName.unwrap(label), type] as const;
+
+const invertTypeEntries = flow(
+  (record: Readonly<Record<IssueType, LabelName>>) => RR.toEntries(record),
+  RA.map(labelEntryToType),
+);
+
 export const LABEL_TO_TYPE: Readonly<Record<string, IssueType>> = Object.fromEntries(
-  pipe(
-    RR.toEntries(TYPE_TO_LABEL),
-    RA.map(([type, label]) => [isoLabelName.unwrap(label), type] as const),
-  ),
+  invertTypeEntries(TYPE_TO_LABEL),
 );
 
 export type LabelDefinition = {
@@ -189,25 +196,29 @@ export function isContainerIssue(issue: Pick<IssueNode, 'type' | 'subIssueNumber
   return !isExecutableLeaf(issue);
 }
 
-export function branchNameForIssue(issueNumber: IssueNumber) {
-  return isoBranchName.wrap(`ai/issue-${String(isoIssueNumber.unwrap(issueNumber))}`);
-}
+const formatIssueBranchName = (issueNumber: number) => `ai/issue-${String(issueNumber)}`;
 
-export function extractStatusFromFieldValue(value: O.Option<string>) {
-  return pipe(
-    value,
-    O.flatMap((v) => O.fromNullable(FIELD_VALUE_TO_STATUS[v])),
-    O.getOrElseW(() => 'backlog' as const),
-  );
-}
+export const branchNameForIssue = flow(
+  isoIssueNumber.unwrap,
+  formatIssueBranchName,
+  isoBranchName.wrap,
+);
 
-export function extractTypeFromLabels(labels: ReadonlyArray<LabelName>) {
-  return pipe(
-    labels,
-    RA.findFirstMap((label) => O.fromNullable(LABEL_TO_TYPE[isoLabelName.unwrap(label)])),
-    O.getOrElseW(() => 'task' as const),
-  );
-}
+const lookupStatusByValue = (value: string) => O.fromNullable(FIELD_VALUE_TO_STATUS[value]);
+
+export const extractStatusFromFieldValue = flow(
+  O.flatMap(lookupStatusByValue),
+  O.getOrElseW(() => 'backlog' as const),
+);
+
+const lookupTypeByLabelName = (labelName: string) => O.fromNullable(LABEL_TO_TYPE[labelName]);
+
+const lookupTypeByLabel = flow(isoLabelName.unwrap, lookupTypeByLabelName);
+
+export const extractTypeFromLabels = flow(
+  RA.findFirstMap(lookupTypeByLabel),
+  O.getOrElseW(() => 'task' as const),
+);
 
 export const ResolvedCommentSchema = z.object({
   threadId: z.string().min(1),
